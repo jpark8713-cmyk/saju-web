@@ -75,10 +75,27 @@ export function toSolar(d: LunarDate): SolarDate {
     return { ...r.solar };
   } catch (e) {
     if (!isLibraryDateError(e)) throw e;
-    const filled = fillLunarHole(d);
+    const filled = fillLunarHole(d) ?? findInNextSolarYear(d);
     if (filled) return filled;
     throw new CalendarInputError('invalidLunarDate', '존재하지 않는 음력 날짜입니다(윤달 여부를 확인해 주세요)');
   }
+}
+
+/**
+ * 라이브러리의 lunarToSolar는 음력 연도와 같은 양력 연도 안에서만 찾는다(1.0.8).
+ * 그래서 양력으로 다음 해 1~2월에 오는 음력 11·12월 날짜를 못 찾는다(D-026).
+ * 다음 해 1월 1일~3월 1일을 양력→음력으로 훑어 같은 음력 날짜를 찾는다.
+ */
+function findInNextSolarYear(d: LunarDate): SolarDate | null {
+  if (d.month < 11) return null;
+  const start: SolarDate = { year: d.year + 1, month: 1, day: 1 };
+  for (let i = 0; i <= 60; i++) {
+    const s = addDays(start, i);
+    if (s.year > SUPPORTED_RANGE.maxYear) return null;
+    const l = toLunar(s);
+    if (l.year === d.year && l.month === d.month && l.day === d.day && l.isLeapMonth === d.isLeapMonth) return s;
+  }
+  return null;
 }
 
 /** 라이브러리 데이터 구멍에 해당하는 음력 날짜인지 확인하고 양력을 돌려준다 */

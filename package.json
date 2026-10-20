@@ -8,16 +8,31 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "fetch:kasi": "node --env-file-if-exists=.env --experimental-strip-types scripts/fetch-kasi-terms.ts",
-    "measure:cost": "tsx --env-file-if-exists=.env scripts/measure-cost.ts"
+    "measure:cost": "tsx --env-file-if-exists=.env scripts/measure-cost.ts",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typegen": "next typegen",
+    "e2e": "playwright test",
+    "e2e:prod": "playwright test -c playwright.prod.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.131.0",
+    "@fontsource/noto-sans-kr": "5.3.0",
+    "@fontsource/noto-serif-kr": "5.3.0",
     "@fullstackfamily/manseryeok": "1.0.8",
     "lunar-javascript": "1.7.7",
+    "next": "16.3.8",
+    "playwright": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "tsx": "4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"

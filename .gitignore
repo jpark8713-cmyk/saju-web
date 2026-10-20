@@ -11,3 +11,9 @@ samples-output/
 antropic.txt
 anthropic*.txt
 *api*key*.txt
+
+# Next.js
+next-env.d.ts
+*.tsbuildinfo
+test-results/
+playwright-report/
