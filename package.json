@@ -1,0 +1,21 @@
+{
+  "name": "saju-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "근거가 보이는 사주 리포트 웹서비스",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "fetch:kasi": "node --env-file-if-exists=.env --experimental-strip-types scripts/fetch-kasi-terms.ts"
+  },
+  "dependencies": {
+    "@fullstackfamily/manseryeok": "1.0.8",
+    "lunar-javascript": "1.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,0 +1,102 @@
+// 양력·음력 변환. 한국 음력(윤달 위치)은 한국천문연구원 데이터 기반인 manseryeok을 쓴다.
+import { InvalidDateError, OutOfRangeError, lunarToSolar, solarToLunar } from '@fullstackfamily/manseryeok';
+import { SUPPORTED_RANGE } from './settings';
+
+export interface SolarDate {
+  year: number;
+  month: number;
+  day: number;
+}
+
+export interface LunarDate extends SolarDate {
+  isLeapMonth: boolean;
+}
+
+export class CalendarInputError extends Error {
+  constructor(
+    readonly code: 'outOfRange' | 'invalidSolarDate' | 'invalidLunarDate' | 'invalidInput',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CalendarInputError';
+  }
+}
+
+const DAY_MS = 86_400_000;
+
+function addDays(d: SolarDate, days: number): SolarDate {
+  const t = new Date(Date.UTC(d.year, d.month - 1, d.day) + days * DAY_MS);
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate() };
+}
+
+export function isValidSolarDate(d: SolarDate): boolean {
+  const t = new Date(Date.UTC(d.year, d.month - 1, d.day));
+  return t.getUTCFullYear() === d.year && t.getUTCMonth() + 1 === d.month && t.getUTCDate() === d.day;
+}
+
+function assertInRange(year: number): void {
+  if (year < SUPPORTED_RANGE.minYear || year > SUPPORTED_RANGE.maxYear) {
+    throw new CalendarInputError(
+      'outOfRange',
+      `${SUPPORTED_RANGE.minYear}~${SUPPORTED_RANGE.maxYear}년만 지원합니다`,
+    );
+  }
+}
+
+function isLibraryDateError(e: unknown): boolean {
+  return e instanceof InvalidDateError || e instanceof OutOfRangeError;
+}
+
+/** 양력 → 음력. 라이브러리 데이터가 빠진 날(1956-12-31)은 전날 음력 + 1일로 메운다 */
+export function toLunar(d: SolarDate): LunarDate {
+  assertInRange(d.year);
+  if (!isValidSolarDate(d)) {
+    throw new CalendarInputError('invalidSolarDate', '존재하지 않는 양력 날짜입니다');
+  }
+  try {
+    const r = solarToLunar(d.year, d.month, d.day);
+    return { ...r.lunar };
+  } catch (e) {
+    if (!isLibraryDateError(e)) throw e;
+    const prev = solarToLunar(...ymd(addDays(d, -1)));
+    return { ...prev.lunar, day: prev.lunar.day + 1 };
+  }
+}
+
+function ymd(d: SolarDate): [number, number, number] {
+  return [d.year, d.month, d.day];
+}
+
+/** 음력 → 양력. 윤달이 없는 달에 윤달을 지정하면 거부한다 */
+export function toSolar(d: LunarDate): SolarDate {
+  assertInRange(d.year);
+  try {
+    const r = lunarToSolar(d.year, d.month, d.day, d.isLeapMonth);
+    return { ...r.solar };
+  } catch (e) {
+    if (!isLibraryDateError(e)) throw e;
+    const filled = fillLunarHole(d);
+    if (filled) return filled;
+    throw new CalendarInputError('invalidLunarDate', '존재하지 않는 음력 날짜입니다(윤달 여부를 확인해 주세요)');
+  }
+}
+
+/** 라이브러리 데이터 구멍에 해당하는 음력 날짜인지 확인하고 양력을 돌려준다 */
+function fillLunarHole(d: LunarDate): SolarDate | null {
+  if (d.day < 2) return null;
+  let prev: SolarDate;
+  try {
+    prev = lunarToSolar(d.year, d.month, d.day - 1, d.isLeapMonth).solar;
+  } catch (e) {
+    if (isLibraryDateError(e)) return null;
+    throw e;
+  }
+  const candidate = addDays(prev, 1);
+  try {
+    solarToLunar(...ymd(candidate));
+    return null; // 다음 날 데이터가 있으면 구멍이 아니다 → 원래 날짜가 존재하지 않음
+  } catch (e) {
+    if (!isLibraryDateError(e)) throw e;
+    return candidate;
+  }
+}
