@@ -1,9 +1,10 @@
 // 풀이 근거 목록. 차트 값만으로 만들며, 풀이 문장은 이 목록의 id만 인용할 수 있다.
 import {
   BRANCHES_HANJA, BRANCHES_KO, BRANCH_ELEMENTS, ELEMENTS, ELEMENT_HANJA, ELEMENT_KO, PART_KO,
-  POSITION_KO, STEMS_HANJA, STEMS_KO, STEM_ELEMENTS, TEN_GOD_KO, branchLabel, pillarHanja, pillarKo,
-  pillarLabel, stemLabel, stemYinYang,
+  POSITION_KO, STEMS_HANJA, STEMS_KO, STEM_ELEMENTS, TEN_GOD_GROUPS, TEN_GOD_KO, branchLabel, pillarHanja,
+  pillarKo, pillarLabel, stemLabel, stemYinYang,
 } from './constants';
+import { daewoonStartLabel } from './daewoon';
 import type { ChartRef, Element, Evidence, PillarPosition, Relation, SajuChart } from './types';
 
 const POSITIONS: PillarPosition[] = ['year', 'month', 'day', 'hour'];
@@ -82,6 +83,31 @@ function tenGodEvidence(chart: SajuChart): Evidence[] {
   });
 }
 
+/** 십신 그룹(비겁·식상·재성·관성·인성)별 개수. 0개도 근거가 된다 */
+function tenGodGroupEvidence(chart: SajuChart): Evidence[] {
+  const dayEl = ELEMENTS.indexOf(STEM_ELEMENTS[chart.pillars.day.stem]!);
+  return TEN_GOD_GROUPS.map((g, step): Evidence => {
+    const hits = chart.tenGods.filter((t) => (g.members as readonly string[]).includes(t.tenGod));
+    const el = ELEMENTS[(dayEl + step) % 5]!;
+    // 원국에 실제로 있는 구성 십신만 문구에 적는다. 없는 십신 이름을 보여 주면 모델이 그대로 옮겨 검증에 걸린다
+    const present = g.members.filter((m) => hits.some((t) => t.tenGod === m)).map((m) => TEN_GOD_KO[m]);
+    const label = present.length ? `${g.ko}(${present.join('·')}, 오행 ${elementLabel(el)})` : `${g.ko}(오행 ${elementLabel(el)})`;
+    const where = hits.length
+      ? `: ${hits.map((t) => `${POSITION_KO[t.position]} ${PART_KO[t.part]}(${TEN_GOD_KO[t.tenGod]})`).join(', ')}`
+      : '';
+    return {
+      id: `tenGodGroup.${g.id}`,
+      kind: 'tenGodGroup',
+      content: `${label}은(는) 일간을 뺀 원국 글자 중 ${hits.length}개${where}`,
+      sourceFields: ['tenGods', 'pillars.day.stem'],
+      // 0개면 그 오행 칸을, 있으면 해당 글자를 가리킨다
+      chartRefs: hits.length ? hits.map((t) => `${t.position}.${t.part}` as ChartRef) : [`elements.${el}`],
+      // 실제로 있는 십신 이름만 허용한다 (0개면 그룹 이름만: "재성이 없다"는 되고 "정재가 있다"는 안 된다)
+      terms: [g.ko, ...new Set(hits.map((t) => TEN_GOD_KO[t.tenGod]))],
+    };
+  });
+}
+
 function elementEvidence(chart: SajuChart): Evidence[] {
   const { counts, total } = chart.elements;
   const perElement = ELEMENTS.map((el): Evidence => ({
@@ -127,7 +153,10 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
   const direction: Evidence = {
     id: 'daewoon.direction',
     kind: 'daewoonDirection',
-    content: `대운은 ${s.forward ? '순행' : '역행'}하며 출생 후 ${s.years}년 ${s.months}개월에 첫 대운이 시작됨(${s.forward ? '다음' : '이전'} 절입 ${s.jieName} 기준)`,
+    // 시작 시점은 표준 표기(K세(YYYY년 M월)) 하나만 둔다. 다른 표기(출생 후 n년 n개월 등)를 함께 보이면 문장마다 표기가 갈린다(D-022)
+    content: chart.daewoon.length
+      ? `대운은 ${s.forward ? '순행' : '역행'}하며 첫 대운은 ${daewoonStartLabel(chart.daewoon[0]!)}부터 시작됨(${s.forward ? '다음' : '이전'} 절입 ${s.jieName} 기준, 나이는 세는 나이)`
+      : `대운은 ${s.forward ? '순행' : '역행'}함`,
     sourceFields: ['daewoonStart'],
     chartRefs: chart.daewoon.length ? ['daewoon[0]'] : [],
     terms: [],
@@ -135,7 +164,7 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
   const entries = chart.daewoon.map((d): Evidence => ({
     id: `daewoon[${d.index}]`,
     kind: 'daewoon',
-    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${d.koreanAge}세(세는 나이, ${d.startYear}년 ${d.startMonth}월)부터 10년, 출생 후 ${d.startOffset.years}년 ${d.startOffset.months}개월`,
+    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${daewoonStartLabel(d)}부터 10년(나이는 세는 나이)`,
     sourceFields: [`daewoon[${d.index}]`],
     chartRefs: [`daewoon[${d.index}]`],
     terms: [pillarKo(d.pillar), pillarHanja(d.pillar), STEMS_KO[d.pillar.stem]!, BRANCHES_KO[d.pillar.branch]!],
@@ -159,6 +188,7 @@ export function buildEvidence(chart: SajuChart): Evidence[] {
     dayMasterEvidence(chart),
     ...pillarEvidence(chart),
     ...tenGodEvidence(chart),
+    ...tenGodGroupEvidence(chart),
     ...elementEvidence(chart),
     ...relationEvidence(chart),
     ...daewoonEvidence(chart),

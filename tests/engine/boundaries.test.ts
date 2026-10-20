@@ -174,6 +174,9 @@ describe('8. 남녀에 따른 대운 순행/역행', () => {
       const lib = lunarJsDaewoon(c);
       expect(c.daewoonStart).toMatchObject({ years: lib.years, months: lib.months, forward: lib.forward });
       expect(c.daewoon.map((d) => enginePillarHanja(d.pillar))).toEqual(lib.pillars);
+      // 첫 대운 시작일 = 출생일 + 대운수(년·개월·일), 라이브러리 getStartSolar()와 같아야 한다
+      const d0 = c.daewoon[0]!;
+      expect({ year: d0.startYear, month: d0.startMonth, day: d0.startDay }).toEqual(lib.startDate);
     }
   });
 });

@@ -5,3 +5,9 @@ node_modules/
 coverage/
 dist/
 .next/
+samples-output/
+
+# 키 메모 파일 (저장소에 두지 않는다)
+antropic.txt
+anthropic*.txt
+*api*key*.txt

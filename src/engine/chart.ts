@@ -61,7 +61,7 @@ export function buildChart(input: SajuInput, options: ChartOptions): SajuChart {
 
   const pillars = computePillars({ instantMs: time.instantMs, local: time.localSolarTime, hasTime, jasiMode: settings.jasiMode });
   const daewoonStart = computeDaewoonStart(time.instantMs, pillars.year.stem, input.gender, settings.daewoonRounding);
-  const daewoon = computeDaewoon(pillars.month, daewoonStart, solarDate, settings.daewoonCount);
+  const daewoon = computeDaewoon(pillars.month, daewoonStart, { ...solarDate, ...clock }, settings.daewoonCount);
 
   const dayJie = hasTime ? null : jieOnDay(solarDate, settings.historicalTimezone);
   const warnings: ChartWarning[] = [

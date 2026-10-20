@@ -47,6 +47,10 @@ export function lunarJsDaewoon(chart: SajuChart) {
     years: yun.getStartYear(),
     months: yun.getStartMonth(),
     forward: yun.isForward(),
+    startDate: (() => {
+      const d = yun.getStartSolar();
+      return { year: d.getYear(), month: d.getMonth(), day: d.getDay() };
+    })(),
     pillars: yun.getDaYun(11).slice(1).map((d) => d.getGanZhi()),
   };
 }

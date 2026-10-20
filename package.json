@@ -7,14 +7,18 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "fetch:kasi": "node --env-file-if-exists=.env --experimental-strip-types scripts/fetch-kasi-terms.ts"
+    "fetch:kasi": "node --env-file-if-exists=.env --experimental-strip-types scripts/fetch-kasi-terms.ts",
+    "measure:cost": "tsx --env-file-if-exists=.env scripts/measure-cost.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "@fullstackfamily/manseryeok": "1.0.8",
-    "lunar-javascript": "1.7.7"
+    "lunar-javascript": "1.7.7",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "tsx": "4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }

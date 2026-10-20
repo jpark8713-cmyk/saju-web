@@ -101,6 +101,8 @@ export interface DaewoonStart {
   years: number;
   months: number;
   days: number;
+  /** 일 아래 나머지(1분 = 2시간). 시작일 계산에만 쓴다 */
+  hours: number;
   forward: boolean;
   /** 계산에 쓴 절입 시각 (UTC epoch ms) */
   jieInstantMs: number;
@@ -112,9 +114,10 @@ export interface DaewoonEntry {
   pillar: Pillar;
   /** 대운 시작 시점까지 출생 후 경과 (만 기준) */
   startOffset: { years: number; months: number };
-  /** 대운이 시작되는 양력 연·월 */
+  /** 대운이 시작되는 양력 날짜 (출생일 + 대운수 년·개월·일 + 10년×순번) */
   startYear: number;
   startMonth: number;
+  startDay: number;
   /** 대운이 시작되는 해의 세는 나이 (startYear - 출생 연도 + 1) */
   koreanAge: number;
 }
@@ -205,6 +208,7 @@ export type EvidenceKind =
   | 'pillar'
   | 'dayMaster'
   | 'tenGod'
+  | 'tenGodGroup'
   | 'elementBalance'
   | 'relation'
   | 'daewoonDirection'

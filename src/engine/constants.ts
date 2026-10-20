@@ -74,3 +74,12 @@ export function stemLabel(stem: number): string {
 export function branchLabel(branch: number): string {
   return `${BRANCHES_KO[branch]}(${BRANCHES_HANJA[branch]})`;
 }
+
+/** 십신 그룹: 일간 기준 오행 관계 순서(같음→생함→극함→극당함→생받음)와 같은 순서 */
+export const TEN_GOD_GROUPS = [
+  { id: 'bigeop', ko: '비겁', members: ['bigyeon', 'geobjae'] },
+  { id: 'siksang', ko: '식상', members: ['siksin', 'sanggwan'] },
+  { id: 'jaeseong', ko: '재성', members: ['pyeonjae', 'jeongjae'] },
+  { id: 'gwanseong', ko: '관성', members: ['pyeongwan', 'jeonggwan'] },
+  { id: 'inseong', ko: '인성', members: ['pyeonin', 'jeongin'] },
+] as const satisfies readonly { id: string; ko: string; members: readonly TenGod[] }[];

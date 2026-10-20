@@ -121,3 +121,22 @@ describe('근거 목록', () => {
     expect(isValidChartRef(chart, 'elements.wood')).toBe(true);
   });
 });
+
+describe('십신 그룹 근거 문구', () => {
+  it('원국에 있는 구성 십신 이름만 문구에 적는다 (0개면 이름 없이)', () => {
+    for (const input of [solar(1990, 5, 15, { hour: 14, minute: 30 }), solar(1988, 9, 17, null), solar(2001, 3, 21, { hour: 2, minute: 15 })]) {
+      const chart = chartOf(input);
+      const groups = buildEvidence(chart).filter((e) => e.kind === 'tenGodGroup');
+      expect(groups).toHaveLength(5);
+      for (const e of groups) {
+        const present = e.terms.slice(1); // terms = [그룹명, ...있는 십신]
+        const allNames = Object.values(TEN_GOD_KO);
+        for (const name of allNames) {
+          // 문구에 나오는 십신 이름은 모두 terms(실제로 있는 것)에 들어 있어야 한다
+          if (e.content.includes(name)) expect(present, `${e.id}: ${name}`).toContain(name);
+        }
+        if (e.content.includes(' 0개')) expect(present).toEqual([]);
+      }
+    }
+  });
+});

@@ -24,6 +24,7 @@ declare module 'lunar-javascript' {
     getStartDay(): number;
     getStartHour(): number;
     isForward(): boolean;
+    getStartSolar(): LjSolar;
     getDaYun(n?: number): LjDaYun[];
   }
 
