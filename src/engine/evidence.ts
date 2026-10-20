@@ -92,9 +92,18 @@ function tenGodGroupEvidence(chart: SajuChart): Evidence[] {
     // 원국에 실제로 있는 구성 십신만 문구에 적는다. 없는 십신 이름을 보여 주면 모델이 그대로 옮겨 검증에 걸린다
     const present = g.members.filter((m) => hits.some((t) => t.tenGod === m)).map((m) => TEN_GOD_KO[m]);
     const label = present.length ? `${g.ko}(${present.join('·')}, 오행 ${elementLabel(el)})` : `${g.ko}(오행 ${elementLabel(el)})`;
+    // 위치와 함께 그 자리의 글자도 적는다 (예: 년주 지지 오(午) 정관). 글자 없이 위치만 있으면 모델이 글자를 써서 검증에 걸렸다(D-018)
+    const glyph = (t: (typeof hits)[number]) => {
+      const p = chart.pillars[t.position]!;
+      return t.part === 'stem' ? stemLabel(p.stem) : branchLabel(p.branch);
+    };
     const where = hits.length
-      ? `: ${hits.map((t) => `${POSITION_KO[t.position]} ${PART_KO[t.part]}(${TEN_GOD_KO[t.tenGod]})`).join(', ')}`
+      ? `: ${hits.map((t) => `${POSITION_KO[t.position]} ${PART_KO[t.part]} ${glyph(t)} ${TEN_GOD_KO[t.tenGod]}`).join(', ')}`
       : '';
+    const glyphTerms = hits.flatMap((t) => {
+      const p = chart.pillars[t.position]!;
+      return t.part === 'stem' ? [STEMS_KO[p.stem]!, STEMS_HANJA[p.stem]!] : [BRANCHES_KO[p.branch]!, BRANCHES_HANJA[p.branch]!];
+    });
     return {
       id: `tenGodGroup.${g.id}`,
       kind: 'tenGodGroup',
@@ -102,8 +111,8 @@ function tenGodGroupEvidence(chart: SajuChart): Evidence[] {
       sourceFields: ['tenGods', 'pillars.day.stem'],
       // 0개면 그 오행 칸을, 있으면 해당 글자를 가리킨다
       chartRefs: hits.length ? hits.map((t) => `${t.position}.${t.part}` as ChartRef) : [`elements.${el}`],
-      // 실제로 있는 십신 이름만 허용한다 (0개면 그룹 이름만: "재성이 없다"는 되고 "정재가 있다"는 안 된다)
-      terms: [g.ko, ...new Set(hits.map((t) => TEN_GOD_KO[t.tenGod]))],
+      // 그룹 이름 + 실제로 있는 십신 이름 + 그 자리의 글자. 0개면 그룹 이름만("재성이 없다"는 되고 "정재가 있다"는 안 된다)
+      terms: [g.ko, ...new Set(hits.map((t) => TEN_GOD_KO[t.tenGod])), ...new Set(glyphTerms)],
     };
   });
 }

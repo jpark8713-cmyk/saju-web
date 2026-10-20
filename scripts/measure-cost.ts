@@ -15,6 +15,7 @@ import { GenerationError, GenerationInterrupted, generateReport, type AttemptRec
 import { MODEL_PRICES, costUsd, type TokenUsage } from '../src/llm/pricing';
 import { SAMPLE_INPUTS, SAMPLE_REFERENCE_YEAR } from '../src/llm/samples';
 import { LlmModerator, MODERATION_MODEL } from '../src/llm/moderation';
+import { evidenceReuse, sumReuse } from '../src/llm/reuseMetric';
 import { AnthropicTransport, type LlmRequest, type LlmResponse, type LlmTransport } from '../src/llm/transport';
 import type { ReportBody, ReportSentence } from '../src/llm/types';
 import { prepareRules, validateSentence } from '../src/llm/validate';
@@ -45,17 +46,32 @@ function safeCost(u: TokenUsage): number {
  * 호출마다 비용을 더하고 예산을 넘으면 다음 호출을 막는다.
  * 한 리포트의 호출(기본 + 주제 3개)은 동시에 시작하므로, 예산은 그만큼(약 1리포트분) 넘을 수 있다.
  */
+/** 호출 한 번의 소요 시간 (재시도·검수 호출도 각각 한 번) */
+interface CallTiming {
+  label: string;
+  ms: number;
+  ok: boolean;
+}
+
 class BudgetedTransport implements LlmTransport {
   static spent = 0;
+  static timings: CallTiming[] = [];
   constructor(private readonly inner: LlmTransport, private readonly budgetUsd: number) {}
   get model(): string {
     return this.inner.model;
   }
   async complete(req: LlmRequest, signal?: AbortSignal): Promise<LlmResponse> {
     if (BudgetedTransport.spent >= this.budgetUsd) throw new BudgetExceeded(`예산 ${this.budgetUsd} USD 도달`);
-    const res = await this.inner.complete(req, signal);
-    BudgetedTransport.spent += res.usage.reduce((a, u) => a + safeCost(u), 0);
-    return res;
+    const started = performance.now();
+    try {
+      const res = await this.inner.complete(req, signal);
+      BudgetedTransport.timings.push({ label: req.label, ms: Math.round(performance.now() - started), ok: true });
+      BudgetedTransport.spent += res.usage.reduce((a, u) => a + safeCost(u), 0);
+      return res;
+    } catch (e) {
+      BudgetedTransport.timings.push({ label: req.label, ms: Math.round(performance.now() - started), ok: false });
+      throw e;
+    }
   }
 }
 
@@ -85,6 +101,10 @@ interface SampleResult {
   body?: ReportBody;
   /** 최종 문장 재검사: 근거 외 간지 언급, 근거 id 문제 */
   recheck?: { sentences: number; offEvidenceTerms: number; badEvidenceIds: number };
+  /** 리포트 1건 생성에 걸린 전체 시간(기본·주제 호출이 병렬로 돈다) */
+  reportMs?: number;
+  /** 이 샘플의 호출별 소요 시간 */
+  timings?: CallTiming[];
 }
 
 async function runModel(
@@ -103,10 +123,19 @@ async function runModel(
   for (let i = offset; i < offset + samples; i++) {
     const chart = buildChart(SAMPLE_INPUTS[i]!, { referenceYear: SAMPLE_REFERENCE_YEAR });
     const evidence = buildEvidence(chart);
+    const timingStart = BudgetedTransport.timings.length;
+    const started = performance.now();
     try {
       const r = await generateReport({ chart, evidence, topicIds, referenceYear: SAMPLE_REFERENCE_YEAR, transport, moderator });
       // 결제된 시도 기록을 먼저 남기고, 재검사가 실패해도 기록은 잃지 않는다
-      const result: SampleResult = { sample: i, ok: true, attempts: r.attempts.map((a) => ({ ...a, costUsd: attemptCost(a) })), body: r.body };
+      const result: SampleResult = {
+        sample: i,
+        ok: true,
+        attempts: r.attempts.map((a) => ({ ...a, costUsd: attemptCost(a) })),
+        body: r.body,
+        reportMs: Math.round(performance.now() - started),
+        timings: BudgetedTransport.timings.slice(timingStart),
+      };
       results.push(result);
       try {
         const rules = prepareRules({ evidence, forbidden: COMMON_FORBIDDEN, maxChars: REPORT_LAYOUT.maxSentenceChars });
@@ -178,12 +207,34 @@ function summarize(model: string, results: SampleResult[]) {
       ),
     },
     violationCodes: all.flatMap((a) => a.violations.map((v) => v.code)).reduce<Record<string, number>>((m, c) => ({ ...m, [c]: (m[c] ?? 0) + 1 }), {}),
+    /** 대운 시작 표기 위반(D-022): 호출(샘플×라벨) 단위로 센다 */
+    daewoonStartFormat: (() => {
+      const calls = results.flatMap((r) => [...new Set(r.attempts.map((a) => a.label))].map((label) => r.attempts.filter((a) => a.label === label)));
+      const has = (a: AttemptRecord) => a.violations.some((v) => v.code === 'daewoonStartFormat');
+      return {
+        calls: calls.length,
+        callsWithFirstAttemptViolation: calls.filter((c) => c.some((a) => a.attempt === 1 && has(a))).length,
+        callsWithAnyViolation: calls.filter((c) => c.some(has)).length,
+      };
+    })(),
+    /** 근거 반복(D-023 C): 최종 리포트 기준 */
+    evidenceReuse: sumReuse(results.flatMap((r) => (r.body ? [evidenceReuse(r.body)] : []))),
     recheck: {
       sentences: results.reduce((s, r) => s + (r.recheck?.sentences ?? 0), 0),
       offEvidenceTerms: results.reduce((s, r) => s + (r.recheck?.offEvidenceTerms ?? 0), 0),
       badEvidenceIds: results.reduce((s, r) => s + (r.recheck?.badEvidenceIds ?? 0), 0),
     },
     totalUsd: Number(all.reduce((s, a) => s + a.costUsd, 0).toFixed(4)),
+    /** 소요 시간(ms): 성공한 리포트의 전체 시간, 호출 종류별 한 번의 시간 */
+    timing: (() => {
+      const stat = (xs: number[]) => ({ n: xs.length, avgMs: xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0, maxMs: xs.length ? Math.max(...xs) : 0 });
+      const calls = results.flatMap((r) => r.timings ?? []).filter((t) => t.ok);
+      const labels = [...new Set(calls.map((t) => t.label))].sort();
+      return {
+        report: stat(results.filter((r) => r.ok && r.reportMs !== undefined).map((r) => r.reportMs!)),
+        perCall: Object.fromEntries(labels.map((l) => [l, stat(calls.filter((t) => t.label === l).map((t) => t.ms))])),
+      };
+    })(),
   };
 }
 

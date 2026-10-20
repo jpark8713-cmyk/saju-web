@@ -41,6 +41,29 @@ function retryNote(violations: readonly Violation[]): string {
   return `\n\n## 이전 응답이 어긴 규칙\n이전 응답은 아래 이유로 거부됐습니다. 같은 실수를 하지 않도록 처음부터 다시 씁니다.\n${lines.join('\n')}`;
 }
 
+/** id 목록을 짧게 보여 준다 (없으면 "없음") */
+function idList(evidence: readonly Evidence[], pick: (e: Evidence) => boolean): string {
+  const ids = evidence.filter(pick).map((e) => e.id);
+  return ids.length ? ids.join(', ') : '없음';
+}
+
+/**
+ * 근거 반복 줄이기 A(D-023): 칸마다 먼저 쓸 근거를 정해 준다.
+ * 총평 템플릿이 이미 dayMaster·elements.summary를 쓰므로 다른 칸에서는 되도록 다시 쓰지 않게 한다.
+ */
+function sectionPriorities(evidence: readonly Evidence[], daewoonIndices: readonly number[]): string[] {
+  const daewoonIds = new Set(['daewoon.direction', ...daewoonIndices.map((i) => `daewoon[${i}]`)]);
+  return [
+    '## 칸별 우선 근거 (같은 근거를 여러 칸에서 되풀이하지 않습니다)',
+    '- 총평 템플릿 두 문장이 이미 dayMaster와 elements.summary를 썼습니다. 이 두 근거는 다른 칸에서 다시 쓰지 않거나, 꼭 필요할 때 한 번만 씁니다.',
+    `- summary(이어 쓰는 문장): 큰 그림. 십신 그룹·개별 오행 → ${idList(evidence, (e) => e.kind === 'tenGodGroup' || (e.kind === 'elementBalance' && e.id !== 'elements.summary'))}`,
+    `- traits: 글자 하나하나의 성향. 원국 글자·개별 십신·합충 → ${idList(evidence, (e) => e.kind === 'pillar' || e.kind === 'tenGod' || e.kind === 'relation')}`,
+    `- daewoonNotes: ${idList(evidence, (e) => daewoonIds.has(e.id))}`,
+    '- yearly: seun[0]·seun[1]을 중심으로 쓰고, 다른 칸에서 쓴 근거는 한 문장에 한 번까지만 덧붙입니다.',
+    '- 한 칸 안에서도 문장마다 되도록 다른 근거를 인용합니다.',
+  ];
+}
+
 export function baseUserMessage(args: {
   evidence: readonly Evidence[];
   templateSummary: readonly ReportSentence[];
@@ -56,10 +79,12 @@ export function baseUserMessage(args: {
     '## 작성할 칸',
     `- summary: 총평. 아래 두 문장 뒤에 이어질 ${L.summaryAiSentences}문장. 앞 문장을 반복하지 말고 자연스럽게 이어 씁니다.`,
     template,
-    `- traits: 타고난 성향 ${L.traitsSentences}문장. 일간·십신·오행·합충 근거를 씁니다.`,
+    `- traits: 타고난 성향 ${L.traitsSentences}문장.`,
     `- daewoonNotes: 대운 흐름. daewoonIndex ${args.daewoonIndices.join(', ')} 순서로 각 ${L.daewoonNoteSentences}문장. 해당 대운 근거(daewoon[n])를 꼭 인용합니다.`,
     `- yearly.thisYear: ${args.thisYear}년 흐름 ${L.yearlySentences}문장 (seun[0] 인용).`,
     `- yearly.nextYear: ${args.thisYear + 1}년 흐름 ${L.yearlySentences}문장 (seun[1] 인용).`,
+    '',
+    ...sectionPriorities(args.evidence, args.daewoonIndices),
   ].join('\n') + retryNote(args.violations ?? []);
 }
 
@@ -74,5 +99,6 @@ export function topicUserMessage(args: {
     `## 작성할 칸: ${args.topic.label} 풀이`,
     `- sentences: ${REPORT_LAYOUT.topicSentences}문장`,
     `- 지침: ${args.topic.guidance}`,
+    '- 이 주제의 고유 근거(십신 그룹·위치·합충)를 먼저 쓰고, 대운·세운 근거는 시기를 말할 때만 씁니다. 문장마다 되도록 다른 근거를 인용합니다.',
   ].join('\n') + retryNote(args.violations ?? []);
 }

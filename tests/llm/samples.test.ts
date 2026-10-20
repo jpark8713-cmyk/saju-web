@@ -31,7 +31,11 @@ describe.each(SAMPLE_INPUTS.map((input, i) => ({ i, input })))('샘플 $i', ({ i
     for (const topic of TOPICS) {
       const sub = topicEvidence(topic, chart, evidence);
       expect(sub.every((e) => ids.has(e.id))).toBe(true);
-      expect(sub.map((e) => e.id)).toEqual(expect.arrayContaining(['dayMaster', 'elements.summary', 'seun[0]', 'seun[1]']));
+      const subIds = sub.map((e) => e.id);
+      expect(subIds).toEqual(expect.arrayContaining(['daewoon.direction', 'seun[0]', 'seun[1]']));
+      // 근거 반복 줄이기 B(D-023): 일간·오행 근거는 주제 호출에 넘기지 않는다
+      expect(subIds.filter((id) => id === 'dayMaster' || id.startsWith('elements.'))).toEqual([]);
+      expect(subIds.some((id) => id.startsWith('tenGodGroup.'))).toBe(true);
     }
   });
 });

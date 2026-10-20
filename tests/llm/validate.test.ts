@@ -271,3 +271,50 @@ describe('숫자 규칙: 리뷰에서 찾은 우회·오탐·누락 (D-022)', ()
     },
   );
 });
+
+describe('기간 표현은 두 자리 연도로 보지 않는다 (리뷰 MEDIUM)', () => {
+  const chart = buildChart(SAMPLE_INPUTS[0]!, { referenceYear: SAMPLE_REFERENCE_YEAR });
+  const ev = new Map(buildEvidence(chart).map((e) => [e.id, e]));
+  const codes = (text: string, ...ids: string[]) => validateNumbers(text, 'p', ids.map((id) => ev.get(id)!)).map((v) => v.code);
+
+  it.each([
+    '10년에 한 번 오는 큰 변화의 흐름으로 볼 수 있어요.',
+    '20년에 걸쳐 쌓아 가는 흐름이에요.',
+    '10년도 지나지 않아 다시 정리할 때가 와요.',
+    '10년에 걸친 대운이에요.',
+    '10년에서 20년 사이에 천천히 다져요.',
+  ])('대운 인용: %s', (text) => {
+    expect(codes(text, 'daewoon[1]')).toEqual([]);
+  });
+
+  it('세운만 인용: "10년에 한 번쯤" 통과', () => {
+    expect(codes('10년에 한 번쯤 방향을 점검해 보면 좋아요.', 'seun[0]')).toEqual([]);
+  });
+
+  it('두 자리 연도 + 부터는 여전히 잡는다', () => {
+    expect(codes('17년부터 흐름이 바뀌어요.', 'daewoon[1]')).toContain('daewoonStartFormat');
+  });
+});
+
+describe('십신 그룹 근거에 글자도 적는다 (D-018, 3차 측정 재시도 원인)', () => {
+  const chart = buildChart(SAMPLE_INPUTS[0]!, { referenceYear: SAMPLE_REFERENCE_YEAR });
+  const evidence = buildEvidence(chart);
+  const rules = prepareRules({ evidence, forbidden: COMMON_FORBIDDEN, maxChars: 120 });
+
+  it('글자가 있는 그룹은 문구와 terms에 그 글자가 들어가고, 그룹을 인용한 문장이 그 글자를 써도 통과', () => {
+    const groups = evidence.filter((e) => e.kind === 'tenGodGroup' && !e.content.includes(' 0개'));
+    expect(groups.length).toBeGreaterThan(0);
+    for (const g of groups) {
+      const hanja = g.terms.find((t) => /[一-鿿]/u.test(t))!;
+      expect(g.content).toContain(`(${hanja})`);
+      const v = validateSentence({ text: `${hanja} 자리의 기운이 드러나는 편이에요.`, evidenceIds: [g.id] }, 's', rules);
+      expect(v, g.id).toEqual([]);
+    }
+  });
+
+  it('0개인 그룹은 여전히 그룹 이름만 허용', () => {
+    for (const g of evidence.filter((e) => e.kind === 'tenGodGroup' && e.content.includes(' 0개'))) {
+      expect(g.terms).toHaveLength(1);
+    }
+  });
+});

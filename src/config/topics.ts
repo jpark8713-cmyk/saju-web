@@ -17,7 +17,7 @@ export interface TopicConfig {
   enabled: boolean;
   /** 샘플 검수를 마쳤는지. TODO(owner): 첫 3개 주제도 Phase 2 샘플로 검수 필요 */
   reviewed: boolean;
-  /** 이 주제 풀이에 넘길 근거 (공통 근거는 코드가 항상 더한다: 일간, 오행 요약, 대운 방향·대운, 세운) */
+  /** 이 주제 풀이에 넘길 근거 (공통 근거는 코드가 항상 더한다: 대운 방향·대운, 세운. D-023) */
   evidence: {
     tenGodGroups: readonly TenGodGroupId[];
     /** 추가로 넘길 근거 id */

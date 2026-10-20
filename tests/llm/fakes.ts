@@ -71,7 +71,7 @@ export function validTopic(ids: string[]): TopicDraft {
 /** 요청 종류에 맞는 정상 응답을 돌려주는 가짜 모델 */
 export function validResponder(daewoonIndices: number[]): Responder {
   return (req) => {
-    const ids = evidenceIdsIn(req.user).filter((id) => id === 'dayMaster' || id.startsWith('elements.'));
+    const ids = evidenceIdsIn(req.user).filter((id) => id === 'dayMaster' || id.startsWith('elements.') || id.startsWith('tenGodGroup.'));
     return { body: req.label === 'base' ? validBase(daewoonIndices, ids) : validTopic(ids) };
   };
 }

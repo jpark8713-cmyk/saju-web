@@ -37,7 +37,7 @@ describe('generateReport + AI 검수', () => {
         : {
             body: n++ === 0
               ? { sentences: [{ text: '주식에 투자하세요.', evidenceIds: ['dayMaster'] }] }
-              : validTopic(['dayMaster']),
+              : validTopic(['seun[0]']),
           },
     );
     const m = new FakeModerator();

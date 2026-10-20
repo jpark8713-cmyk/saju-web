@@ -47,7 +47,7 @@ describe('generateReport', () => {
     const t = new FakeTransport((req) => {
       if (req.label === 'base') return { body: validBase(indices, ['dayMaster']) };
       topicCalls++;
-      const ok = validTopic(['dayMaster']);
+      const ok = validTopic(['seun[0]']);
       return topicCalls === 1 ? { body: { sentences: [{ text: '근거 없는 문장이에요.', evidenceIds: [] }] } } : { body: ok };
     });
     const r = await generateReport(args(t, ['career']));
@@ -60,7 +60,7 @@ describe('generateReport', () => {
 
   it('3회 모두 실패하면 GenerationError (시도 기록 포함)', async () => {
     const t = new FakeTransport((req) =>
-      req.label === 'base' ? { text: '{"summary": 1}' } : { body: validTopic(['dayMaster']) },
+      req.label === 'base' ? { text: '{"summary": 1}' } : { body: validTopic(['seun[0]']) },
     );
     const err = await generateReport(args(t, [])).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GenerationError);

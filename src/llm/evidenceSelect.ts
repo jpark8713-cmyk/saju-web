@@ -3,15 +3,12 @@ import { TEN_GOD_GROUPS } from '../engine/constants';
 import type { Evidence, SajuChart } from '../engine/types';
 import type { TopicConfig } from '../config/topics';
 
-/** 모든 주제에 공통으로 넘기는 근거 */
+/**
+ * 모든 주제에 공통으로 넘기는 근거: 대운·세운(시기 흐름)만.
+ * 일간·오행 근거는 총평·성향에서 이미 다루므로 주제 호출에는 넘기지 않는다(근거 반복 줄이기 B, D-023).
+ */
 function isCommon(e: Evidence): boolean {
-  return (
-    e.id === 'dayMaster' ||
-    e.kind === 'elementBalance' ||
-    e.kind === 'daewoonDirection' ||
-    e.kind === 'daewoon' ||
-    e.kind === 'seun'
-  );
+  return e.kind === 'daewoonDirection' || e.kind === 'daewoon' || e.kind === 'seun';
 }
 
 export function topicEvidence(topic: TopicConfig, chart: SajuChart, evidence: readonly Evidence[]): Evidence[] {
