@@ -11,3 +11,9 @@ export const REFUND_PER_ORDER: WindowLimit = Object.freeze({ max: 5, windowMs: 6
 
 /** 환불 접수: 접속 주소(IP) 하나당 */
 export const REFUND_PER_IP: WindowLimit = Object.freeze({ max: 20, windowMs: 60 * 60_000 });
+
+/** 링크 재발송: 주문번호 하나당 (사업자 결정 2026-10-21 D-033). 없는 주문번호도 똑같이 센다 */
+export const RESEND_PER_ORDER: WindowLimit = Object.freeze({ max: 3, windowMs: 60 * 60_000 });
+
+/** 링크 재발송: 접속 주소(IP) 하나당 */
+export const RESEND_PER_IP: WindowLimit = Object.freeze({ max: 10, windowMs: 60 * 60_000 });

@@ -293,6 +293,8 @@ test('오류 C: 만료 링크 → 링크 다시 받기, 같은 안내 문구', a
   await page.goto('/api/download/expired-token');
   await expect(page.getByTestId('screen-resend')).toBeVisible();
   await expect(page.getByTestId('link-expired')).toBeVisible();
+  // 만료 기간을 분명히 적는다(설정값 30일)
+  await expect(page.getByTestId('link-expired')).toContainText('30일');
   await expectFooter(page);
   await expectNoHorizontalScroll(page);
   await page.getByTestId('resend-order-id').fill('SJ20261020-ABCDEFGH');
@@ -347,4 +349,54 @@ test('계산이 10초를 넘으면 다시 시도 안내', async ({ page }) => {
   await page.getByTestId('input-submit').click();
   await expect(page.getByTestId('calc-retry')).toBeVisible({ timeout: 15_000 });
   await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('이메일로 받기: 결제 화면에 보관 기간, 메일 1통의 링크로 PDF를 받고, 새 링크를 받으면 이전 링크는 만료 화면으로 간다', async ({ page, request, browser }) => {
+  await toPreview(page);
+  await page.getByTestId('delivery-pdf').uncheck();
+  await page.getByTestId('delivery-email').check();
+  const addr = `buyer-${Date.now()}@example.com`;
+  await page.getByTestId('email').fill(addr);
+  await toCheckout(page, []);
+  await expect(page.getByTestId('checkout-retention')).toContainText('30일');
+  await expect(page.getByTestId('checkout-retention')).toContainText('이메일 주소');
+  await pay(page, 'success');
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('email-status')).toHaveAttribute('data-email-status', 'sent', { timeout: 30_000 });
+  await expect(page.getByTestId('delivery-expiry')).toContainText('30일');
+  await expect(page.getByTestId('pdf-download')).toHaveCount(0);
+  const orderId = await page.evaluate(() => JSON.parse(sessionStorage.getItem('saju.order')!).orderId as string);
+
+  const mails = async () => ((await (await request.get('/api/dev/outbox')).json()) as { messages: { to: string; orderId: string; text: string }[] }).messages.filter((m) => m.orderId === orderId);
+  const first = await mails();
+  expect(first).toHaveLength(1);
+  expect(first[0]!.to).toBe(addr);
+  expect(first[0]!.text).toContain('30일');
+  const link1 = /https?:\/\/\S+\/api\/download\/\S+/.exec(first[0]!.text)![0];
+
+  // 다른 기기(새 브라우저)에서 링크를 열면 PDF를 받는다
+  const res = await request.get(link1, { maxRedirects: 0 });
+  expect(res.status()).toBe(200);
+  expect(res.headers()['content-type']).toBe('application/pdf');
+  expect((await res.body()).subarray(0, 5).toString()).toBe('%PDF-');
+
+  // 링크 다시 받기 → 새 메일, 이전 링크는 만료 화면
+  const other = await browser.newPage();
+  try {
+    await other.goto('/resend');
+    await other.getByTestId('resend-order-id').fill(orderId);
+    await other.getByTestId('resend-email').fill(addr);
+    await other.getByTestId('resend-submit').click();
+    await expect(other.getByTestId('resend-message')).toContainText('주문번호와 이메일이 일치하면');
+    await expect.poll(async () => (await mails()).length, { timeout: 15_000 }).toBe(2);
+    await other.goto(link1);
+    await expect(other.getByTestId('link-expired')).toBeVisible();
+    await expectNoHorizontalScroll(other);
+  } finally {
+    await other.close();
+  }
+});
+
+test('운영이 아닌 개발 서버에서만 개발용 메일 보관함이 열린다(운영 빌드 확인은 prod.spec.ts)', async ({ request }) => {
+  expect((await request.get('/api/dev/outbox')).status()).toBe(200);
 });

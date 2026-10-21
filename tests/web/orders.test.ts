@@ -1,7 +1,6 @@
-// Phase 3 서버 로직: 입력 검증, 주문 생성(서버 계산 금액), 생성 후 출생 정보 삭제, 리포트 뷰, 미리보기, 재발송
-// 결제(목 어댑터)·환불·발급 기록 등 Phase 4는 payments.test.ts·refunds.test.ts에 있다.
+// Phase 3 서버 로직: 입력 검증, 주문 생성(서버 계산 금액), 생성 후 출생 정보 삭제, 리포트 뷰, 미리보기
+// 결제(목 어댑터)·환불·발급 기록 등 Phase 4는 payments.test.ts·refunds.test.ts, 결과물 전달(Phase 5)은 delivery.test.ts에 있다.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { POST as resendRoute, RESEND_MESSAGE } from '../../src/app/api/delivery/resend/route';
 import { isFakeLlmEnabled, isMockPaymentAllowed } from '../../src/config/flags';
 import { PRICES, priceFor } from '../../src/config/prices';
 import { createOrder, OrderInputError } from '../../src/orders/create';
@@ -201,12 +200,5 @@ describe('무료 미리보기 응답', () => {
     expect(Object.keys(v).sort()).toEqual(['basis', 'chart', 'cover', 'evidence', 'kind', 'locked', 'summary']);
     expect(v.summary.length).toBeGreaterThan(0);
     expect(v.summary.every((s) => s.refs.length > 0)).toBe(true);
-  });
-});
-
-describe('재발송', () => {
-  it('재발송 응답은 입력과 관계없이 같다', async () => {
-    const res = await resendRoute();
-    expect(await res.json()).toEqual({ message: RESEND_MESSAGE });
   });
 });

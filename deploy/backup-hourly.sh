@@ -25,7 +25,13 @@ IN_CONTAINER="/data/backups/${NAME}"
 s3() { aws --endpoint-url "$ENDPOINT" "$@"; }
 app() { docker exec "$CONTAINER" "$@"; }
 
-# 0) 버킷 보호 확인(필수 조건, Docs/deploy.md 5장). 하나라도 빠졌으면 올리지 않는다
+# 0) 보관 기간(다운로드 링크 만료)이 지난 PDF·리포트·이메일 주소를 먼저 지운다(D-033). 백업보다 먼저 해서 지운 내용이 새 백업에 들어가지 않게 한다.
+#    정리가 실패해도 백업은 계속한다. 실패는 개인정보 없이(건수·오류 종류만) 로그에 남긴다.
+if ! app npm run -s db:purge; then
+  echo "[정리] 만료 데이터 정리에 실패했어요. 백업은 계속해요." >&2
+fi
+
+# 0-1) 버킷 보호 확인(필수 조건, Docs/deploy.md 5장). 하나라도 빠졌으면 올리지 않는다
 VERSIONING="$(s3 s3api get-bucket-versioning --bucket "$BACKUP_BUCKET" --query Status --output text 2>/dev/null || true)"
 if [ "$VERSIONING" != "Enabled" ]; then
   echo "버킷 버전 관리(삭제 방지)가 켜져 있지 않아 백업을 올리지 않아요: ${BACKUP_BUCKET} (상태: ${VERSIONING:-확인 불가})" >&2

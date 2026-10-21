@@ -1,10 +1,10 @@
 // 리포트 PDF: 헤드리스 Chromium(Playwright)으로 인쇄용 페이지(/report/[orderId]/print)를 A4 PDF로 만든다.
 // 화면 리포트와 같은 템플릿(ReportDocument)을 쓴다. 글꼴은 앱에 포함된 Noto Serif KR·Noto Sans KR이며,
 // 모든 글꼴 파일이 내려받아진 뒤(document.fonts.ready) 저장한다(D-025: 호스팅 서버에도 Chromium과 이 글꼴이 필요).
+// 인쇄 페이지는 서버가 잠깐만 쓰는 내부 토큰(x-render-token)으로 연다(D-033). 고객 토큰을 쓰지 않는다.
 import { chromium } from 'playwright';
-import { ORDER_TOKEN_HEADER } from '../orders/access';
 
-export async function renderReportPdf(baseUrl: string, orderId: string, token: string): Promise<Buffer> {
+export async function renderReportPdf(baseUrl: string, orderId: string, auth: { header: string; value: string }): Promise<Buffer> {
   const browser = await chromium.launch();
   try {
     // 토큰은 URL이 아니라 헤더로 넘긴다(주소·로그에 남지 않게). 같은 주소(origin)로 가는 요청에만 붙인다(D-029)
@@ -13,7 +13,7 @@ export async function renderReportPdf(baseUrl: string, orderId: string, token: s
     await context.route('**/*', (route) => {
       const req = route.request();
       if (new URL(req.url()).origin !== origin) return route.continue();
-      return route.continue({ headers: { ...req.headers(), [ORDER_TOKEN_HEADER]: token } });
+      return route.continue({ headers: { ...req.headers(), [auth.header]: auth.value } });
     });
     const page = await context.newPage();
     const res = await page.goto(`${baseUrl}/report/${encodeURIComponent(orderId)}/print`, { waitUntil: 'networkidle' });

@@ -16,7 +16,7 @@ test('운영 클라이언트 번들에 목 결제 코드가 없다', async () =>
   const hits: string[] = [];
   for (const f of files) {
     const text = await readFile(f, 'utf8');
-    for (const needle of ['/api/dev/mock-pg', 'mock-pg-submit', 'success-genfail', '목 결제창']) if (text.includes(needle)) hits.push(`${f}: ${needle}`);
+    for (const needle of ['/api/dev/mock-pg', 'mock-pg-submit', 'success-genfail', '목 결제창', '/api/dev/outbox']) if (text.includes(needle)) hits.push(`${f}: ${needle}`);
   }
   expect(hits).toEqual([]);
 });
@@ -45,6 +45,8 @@ test('운영 빌드에는 목 결제가 없고 결제 수단은 카카오페이�
   expect(confirm.status()).toBe(503);
   const mockPg = await request.post('/api/dev/mock-pg', { form: { paymentKey: 'mock_x', outcome: 'success', amount: '1' } });
   expect(mockPg.status()).toBe(404);
+  // 개발용 메일 보관함도 운영에서는 404
+  expect((await request.get('/api/dev/outbox')).status()).toBe(404);
   const mockPage = await page.goto('/dev/mock-pg?paymentKey=mock_x');
   expect(mockPage!.status()).toBe(404);
   // 결제되지 않았으므로 생성도 시작되지 않는다

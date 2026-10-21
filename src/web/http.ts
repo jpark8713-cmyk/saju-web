@@ -6,7 +6,8 @@ import { OrderInputError } from '../orders/create';
 import { NotPaid, RetryLimitReached } from '../orders/generation';
 import { AlreadyPaid, PaymentInProgress, PaymentRejected, PaymentUnavailable } from '../orders/payment';
 import { RefundInputError } from '../orders/refund';
-import { ReportNotReady } from '../orders/reportAccess';
+import { ReportExpired, ReportNotReady } from '../orders/reportAccess';
+import { ResendInputError } from '../delivery/resend';
 import { StoreMisconfigured } from '../store';
 import { RateLimited } from './rateLimit';
 
@@ -49,6 +50,8 @@ export async function readJson(req: Request): Promise<unknown> {
 export function errorResponse(e: unknown): Response {
   if (e instanceof OrderInputError) return json({ errors: e.errors }, 400);
   if (e instanceof RefundInputError) return json({ errors: e.errors }, 400);
+  if (e instanceof ResendInputError) return json({ errors: e.errors }, 400);
+  if (e instanceof ReportExpired) return json({ error: 'expired' }, 410);
   if (e instanceof AccessDenied) return json({ error: 'not_found' }, 404);
   if (e instanceof NotPaid) return json({ error: 'not_paid' }, 409);
   if (e instanceof RetryLimitReached) return json({ error: 'retry_limit' }, 409);

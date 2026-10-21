@@ -30,8 +30,8 @@
 | `PAYMENT_PROVIDER` | PG 계약 뒤 | `mock`은 운영에서 동작하지 않는다. 실제 PG 어댑터는 별도 Phase |
 | `PAYMENT_METHODS_ENABLED` | 선택 | 켤 결제 수단(쉼표 구분). 기본 `kakaopay` |
 | `PAYMENT_CLIENT_KEY`, `PAYMENT_SECRET_KEY` | PG 계약 뒤 | PG 키 |
-| `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` | Phase 5 | 메일 발송 |
-| `STORAGE_PROVIDER`, `STORAGE_BUCKET`, `DOWNLOAD_TOKEN_TTL_DAYS` | Phase 5 | PDF 저장소·링크 만료 |
+| `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` | 메일 서비스 연동 뒤 | `console`은 개발·테스트 전용이다. 운영에서는 실제 메일 어댑터가 생길 때까지 메일이 나가지 않고(발송 실패로 기록), 고객은 화면에서 PDF를 받는다 |
+| `STORAGE_PROVIDER`, `STORAGE_BUCKET`, `DOWNLOAD_TOKEN_TTL_DAYS` | 쓰지 않음 | PDF는 `/data/pdf/`에 저장한다. 링크·보관 기간(30일)은 `src/config/delivery.ts`에서 바꾼다(D-033) |
 | `ENABLE_FAKE_LLM` | 쓰지 않음 | 개발·테스트 전용 |
 | `DATAGOKR_API_KEY` | 쓰지 않음 | 천문연 대조 fixture 생성용 |
 
@@ -85,6 +85,13 @@
 - 백업용 인증키에는 이 버킷의 읽기·쓰기 권한만 준다(다른 서비스·버킷 권한 없음). 임시 이름을 지우는 객체 삭제(`DeleteObject`)는 필요하고, 버전 삭제(`DeleteObjectVersion`)는 주지 않는다.
 - 업로드는 임시 이름(`saju/sqlite/.incoming/<파일 이름>.part`)으로 먼저 올리고, 크기와 SHA-256(다시 내려받아 계산)이 서버 사본과 같을 때만 정상 이름으로 복사한다. 정상 이름 객체에는 `sha256` 메타데이터가 붙는다. 확인에 실패하면 임시 이름만 남고(7일 수명 주기가 지운다) 스크립트는 실패로 끝난다.
 - TODO(owner): 버킷 정책(Bucket Policy)에 공개 허용(`Principal: *` 등)이 없는지 NCP 콘솔에서 확인한다. 백업 스크립트는 ACL만 확인하고 버킷 정책은 확인하지 않는다.
+
+### 보관 기간 정리 (D-033)
+
+- 매시간 백업 스크립트가 **백업보다 먼저** `npm run db:purge`를 돌린다. 리포트가 완성된 날부터 30일이 지난 주문의 PDF(`/data/pdf/<주문번호>.pdf`)·리포트·이메일 주소·다운로드 링크를 지운다. 주문 기록(번호·금액·결제 승인·상태)과 발급 기록은 남긴다.
+- 정리가 실패해도 백업은 계속한다. 실패는 건수·오류 종류만 로그에 남긴다(주문번호·이메일 없음).
+- 지운 내용도 그 전에 만든 백업에는 최대 7일 남는다. TODO(owner): 이 사실을 개인정보 처리방침에 적는다.
+- PDF 파일은 Object Storage 백업에 들어가지 않는다(DB만 올린다). 복원 뒤 PDF가 없으면 처음 받을 때 리포트로 다시 만든다.
 
 ### 매시간 백업 → NCP Object Storage
 

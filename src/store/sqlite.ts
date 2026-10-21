@@ -5,6 +5,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import {
   IssuanceImmutable,
+  type DeliveryLog,
+  type DeliveryState,
+  type DownloadToken,
   type IssuanceEventType,
   type IssuanceRecord,
   type Order,
@@ -42,6 +45,18 @@ CREATE TABLE IF NOT EXISTS issuance_events (
   type TEXT NOT NULL,
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS download_tokens (
+  token_hash TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS download_tokens_order ON download_tokens(order_id);
+CREATE TABLE IF NOT EXISTS delivery_logs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS delivery_logs_order ON delivery_logs(order_id);
 CREATE TRIGGER IF NOT EXISTS issuances_no_update BEFORE UPDATE ON issuances BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS issuances_no_replace BEFORE INSERT ON issuances WHEN EXISTS (SELECT 1 FROM issuances WHERE order_id = NEW.order_id) BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS issuance_events_no_replace BEFORE INSERT ON issuance_events WHEN NEW.seq IS NOT NULL AND EXISTS (SELECT 1 FROM issuance_events WHERE seq = NEW.seq) BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
@@ -114,6 +129,53 @@ export class SqliteStore implements Store {
 
   async getReport(orderId: string): Promise<Report | null> {
     return parse<Report>(this.db.prepare('SELECT data FROM reports WHERE order_id = ?').get(orderId) as Row | undefined);
+  }
+
+  async deleteReport(orderId: string): Promise<void> {
+    this.db.prepare('DELETE FROM reports WHERE order_id = ?').run(orderId);
+  }
+
+  async listOrdersToPurge(now: Date): Promise<Order[]> {
+    const rows = this.db
+      .prepare(
+        "SELECT data FROM orders WHERE json_extract(data, '$.delivery.expiresAt') IS NOT NULL AND json_extract(data, '$.delivery.purgedAt') IS NULL AND json_extract(data, '$.delivery.expiresAt') <= ?",
+      )
+      .all(now.toISOString()) as Row[];
+    return rows.map((r) => parse<Order>(r)!);
+  }
+
+  async listOrdersWithEmailStatus(status: DeliveryState['email']['status']): Promise<Order[]> {
+    return (this.db.prepare("SELECT data FROM orders WHERE json_extract(data, '$.delivery.email.status') = ?").all(status) as Row[]).map((r) => parse<Order>(r)!);
+  }
+
+  async createDownloadToken(token: DownloadToken): Promise<void> {
+    this.db.prepare('INSERT INTO download_tokens (token_hash, order_id, data) VALUES (?, ?, ?)').run(token.tokenHash, token.orderId, JSON.stringify(token));
+  }
+
+  async findDownloadToken(tokenHash: string): Promise<DownloadToken | null> {
+    return parse<DownloadToken>(this.db.prepare('SELECT data FROM download_tokens WHERE token_hash = ?').get(tokenHash) as Row | undefined);
+  }
+
+  async revokeDownloadTokens(orderId: string, at: string): Promise<number> {
+    return this.tx(() => {
+      const rows = this.db.prepare('SELECT token_hash, data FROM download_tokens WHERE order_id = ?').all(orderId) as Row[];
+      let n = 0;
+      for (const r of rows) {
+        const t = parse<DownloadToken>(r)!;
+        if (t.revokedAt) continue;
+        this.db.prepare('UPDATE download_tokens SET data = ? WHERE token_hash = ?').run(JSON.stringify({ ...t, revokedAt: at }), String(r.token_hash));
+        n += 1;
+      }
+      return n;
+    });
+  }
+
+  async appendDeliveryLog(log: DeliveryLog): Promise<void> {
+    this.db.prepare('INSERT INTO delivery_logs (order_id, data) VALUES (?, ?)').run(log.orderId, JSON.stringify(log));
+  }
+
+  async listDeliveryLogs(orderId: string): Promise<DeliveryLog[]> {
+    return (this.db.prepare('SELECT data FROM delivery_logs WHERE order_id = ? ORDER BY seq').all(orderId) as Row[]).map((r) => parse<DeliveryLog>(r)!);
   }
 
   async findRefundByOrder(orderId: string): Promise<RefundRequest | null> {

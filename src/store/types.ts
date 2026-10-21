@@ -25,6 +25,29 @@ export interface PaymentState {
   lastError: string | null;
 }
 
+/** 결과물 전달 상태 (SPEC Phase 5, D-033) */
+export interface DeliveryState {
+  /** 리포트 완성 시각 + 보관 기간. 이 시각이 지나면 PDF·리포트·이메일 주소를 지운다 */
+  expiresAt: string | null;
+  pdf: {
+    /** 데이터 폴더에 저장된 PDF가 있는지 */
+    stored: boolean;
+    sha256: string | null;
+    createdAt: string | null;
+    lastError: string | null;
+  };
+  email: {
+    status: 'none' | 'sending' | 'sent' | 'failed';
+    attempts: number;
+    sentAt: string | null;
+    lastError: string | null;
+  };
+  /** 서버가 PDF를 만들 때만 쓰는 인쇄 페이지 토큰(해시). 몇 분 뒤 만료된다 */
+  renderToken: { hash: string; expiresAt: string } | null;
+  /** 보관 기간이 지나 PDF·리포트·이메일을 지운 시각 */
+  purgedAt: string | null;
+}
+
 export interface Order {
   /** 주문번호 (소비자에게 보여 준다) */
   id: string;
@@ -39,6 +62,8 @@ export interface Order {
   email: string | null;
   paymentMethod: string;
   payment: PaymentState;
+  /** 결과물 전달 (Phase 5 이전에 만든 주문에는 없을 수 있다: deliveryOf로 읽는다) */
+  delivery?: DeliveryState;
   /** "올해"로 볼 연도 (주문 시점에 고정) */
   referenceYear: number;
   createdAt: string;
@@ -110,6 +135,28 @@ export interface IssuanceRecord {
   events: { type: IssuanceEventType; at: string }[];
 }
 
+/** 이메일 다운로드 링크 토큰. 원문은 저장하지 않고 SHA-256 해시만 저장한다(SPEC Phase 5) */
+export interface DownloadToken {
+  tokenHash: string;
+  orderId: string;
+  createdAt: string;
+  expiresAt: string;
+  /** 재발송으로 새 토큰을 주거나 보관 기간이 끝나면 무효로 한다 */
+  revokedAt: string | null;
+}
+
+/** 발송 기록. 받는 사람 주소·링크는 넣지 않는다 */
+export interface DeliveryLog {
+  orderId: string;
+  channel: 'email';
+  reason: 'initial' | 'resend';
+  attempt: number;
+  outcome: 'sent' | 'failed';
+  /** 실패 이유 코드 */
+  code: string | null;
+  at: string;
+}
+
 export class IssuanceImmutable extends Error {
   constructor() {
     super('발급 기록은 고치거나 지울 수 없습니다');
@@ -126,6 +173,18 @@ export interface Store {
   listOrdersByStatus(status: Order['status']): Promise<Order[]>;
   saveReport(report: Report): Promise<void>;
   getReport(orderId: string): Promise<Report | null>;
+  /** 보관 기간이 지난 리포트를 지운다 */
+  deleteReport(orderId: string): Promise<void>;
+  /** 보관 기간(delivery.expiresAt)이 지났고 아직 지우지 않은 주문 */
+  listOrdersToPurge(now: Date): Promise<Order[]>;
+  /** 전달을 마저 해야 하는 주문(이메일 발송이 도중에 멈춘 주문) */
+  listOrdersWithEmailStatus(status: DeliveryState['email']['status']): Promise<Order[]>;
+  createDownloadToken(token: DownloadToken): Promise<void>;
+  findDownloadToken(tokenHash: string): Promise<DownloadToken | null>;
+  /** 주문의 유효한 토큰을 모두 무효로 한다. 바꾼 개수 */
+  revokeDownloadTokens(orderId: string, at: string): Promise<number>;
+  appendDeliveryLog(log: DeliveryLog): Promise<void>;
+  listDeliveryLogs(orderId: string): Promise<DeliveryLog[]>;
   findRefundByOrder(orderId: string): Promise<RefundRequest | null>;
   getRefund(id: string): Promise<RefundRequest | null>;
   listRefunds(status?: RefundStatus): Promise<RefundRequest[]>;

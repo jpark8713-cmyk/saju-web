@@ -2,6 +2,9 @@
 // 별도 프로세스(관리 스크립트)와는 데이터를 공유하지 않는다.
 import {
   IssuanceImmutable,
+  type DeliveryLog,
+  type DeliveryState,
+  type DownloadToken,
   type IssuanceEventType,
   type IssuanceRecord,
   type Order,
@@ -16,6 +19,8 @@ export class MemoryStore implements Store {
   private readonly reports = new Map<string, Report>();
   private readonly refunds = new Map<string, RefundRequest>();
   private readonly issuances = new Map<string, IssuanceRecord>();
+  private readonly downloadTokens = new Map<string, DownloadToken>();
+  private readonly deliveryLogs: DeliveryLog[] = [];
 
   async createOrder(order: Order): Promise<void> {
     if (this.orders.has(order.id)) throw new Error('주문번호 중복');
@@ -46,6 +51,49 @@ export class MemoryStore implements Store {
   async getReport(orderId: string): Promise<Report | null> {
     const r = this.reports.get(orderId);
     return r ? structuredClone(r) : null;
+  }
+
+  async deleteReport(orderId: string): Promise<void> {
+    this.reports.delete(orderId);
+  }
+
+  async listOrdersToPurge(now: Date): Promise<Order[]> {
+    return [...this.orders.values()]
+      .filter((o) => o.delivery?.expiresAt && !o.delivery.purgedAt && Date.parse(o.delivery.expiresAt) <= now.getTime())
+      .map((o) => structuredClone(o));
+  }
+
+  async listOrdersWithEmailStatus(status: DeliveryState['email']['status']): Promise<Order[]> {
+    return [...this.orders.values()].filter((o) => o.delivery?.email.status === status).map((o) => structuredClone(o));
+  }
+
+  async createDownloadToken(token: DownloadToken): Promise<void> {
+    if (this.downloadTokens.has(token.tokenHash)) throw new Error('토큰 중복');
+    this.downloadTokens.set(token.tokenHash, structuredClone(token));
+  }
+
+  async findDownloadToken(tokenHash: string): Promise<DownloadToken | null> {
+    const t = this.downloadTokens.get(tokenHash);
+    return t ? structuredClone(t) : null;
+  }
+
+  async revokeDownloadTokens(orderId: string, at: string): Promise<number> {
+    let n = 0;
+    for (const [k, t] of this.downloadTokens) {
+      if (t.orderId === orderId && !t.revokedAt) {
+        this.downloadTokens.set(k, { ...t, revokedAt: at });
+        n += 1;
+      }
+    }
+    return n;
+  }
+
+  async appendDeliveryLog(log: DeliveryLog): Promise<void> {
+    this.deliveryLogs.push(structuredClone(log));
+  }
+
+  async listDeliveryLogs(orderId: string): Promise<DeliveryLog[]> {
+    return this.deliveryLogs.filter((l) => l.orderId === orderId).map((l) => structuredClone(l));
   }
 
   async findRefundByOrder(orderId: string): Promise<RefundRequest | null> {

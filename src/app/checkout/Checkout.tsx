@@ -5,6 +5,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { PaymentMethod } from '../../config/paymentMethods';
+import { DOWNLOAD_LINK_TTL_TEXT } from '../../config/delivery';
 import { REFUND_POLICY_SUMMARY } from '../../config/legal';
 import { load, orderHeaders, save, type SavedOrder } from '../../web/session';
 
@@ -85,6 +86,10 @@ export function Checkout({ methods, paymentReady }: { methods: PaymentMethod[]; 
           <span>{won(order.amount)}</span>
         </div>
         <div className="hint">받는 방법: {order.deliveryMethods.map((d) => (d === 'pdf' ? 'PDF 다운로드' : '이메일')).join(', ')}</div>
+        <div className="hint" data-testid="checkout-retention">
+          PDF와 {order.deliveryMethods.includes('email') ? '이메일 다운로드 링크는' : '리포트는'} 리포트가 완성된 날부터 <strong>{DOWNLOAD_LINK_TTL_TEXT}</strong> 동안
+          받을 수 있어요. 그 뒤에는 PDF·리포트{order.deliveryMethods.includes('email') ? '·이메일 주소' : ''}를 삭제해요.
+        </div>
       </section>
 
       <section className="section" aria-label="환불 규정">

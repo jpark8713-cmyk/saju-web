@@ -2,6 +2,8 @@
 // 생성은 백그라운드로 돌고 화면 6이 상태를 조회한다. 성공하면 출생 정보를 지우고 발급 기록을 만든다(SPEC 1장·Phase 4).
 // 서버가 생성 도중 멈춰 "생성 중"에 오래 머문 주문은 실패로 바꿔 재시도나 환불로 이어지게 한다(D-027, D-028).
 import { MAX_GENERATION_RUNS, STALE_GENERATION_MS } from '../config/generation';
+import { expiryFrom } from '../delivery/deliver';
+import { deliveryOf, withDelivery } from '../delivery/state';
 import { buildChart } from '../engine/chart';
 import { buildEvidence } from '../engine/evidence';
 import { GenerationError, generateReport } from '../llm/generate';
@@ -28,17 +30,23 @@ export class RetryLimitReached extends Error {
 export interface OrderStatusView {
   orderId: string;
   status: Order['status'];
-  /** 화면 6의 단계: 결제 확인 → 풀이 작성 → 완료 / 실패, 환불됨 */
-  stage: 'payment' | 'writing' | 'done' | 'failed' | 'refunded';
+  /** 화면 6의 단계: 결제 확인 → 풀이 작성 → 완료 / 실패, 환불됨, 보관 기간 지남 */
+  stage: 'payment' | 'writing' | 'done' | 'failed' | 'refunded' | 'expired';
   runs: number;
   /** 실패했을 때 다시 시도할 수 있는지 */
   canRetry: boolean;
   deliveryMethods: Order['deliveryMethods'];
+  /** PDF·링크를 받을 수 있는 마지막 시각(완성 후 정해진다) */
+  expiresAt: string | null;
+  /** 이메일 발송 상태 (이메일로 받기를 고른 주문) */
+  emailStatus: 'none' | 'sending' | 'sent' | 'failed';
 }
 
 export function statusView(o: Order): OrderStatusView {
-  const stage =
-    o.status === 'done' ? 'done' : o.status === 'failed' ? 'failed' : o.status === 'generating' ? 'writing' : o.status === 'refunded' ? 'refunded' : 'payment';
+  const d = deliveryOf(o);
+  const stage = d.purgedAt
+    ? 'expired'
+    : o.status === 'done' ? 'done' : o.status === 'failed' ? 'failed' : o.status === 'generating' ? 'writing' : o.status === 'refunded' ? 'refunded' : 'payment';
   return {
     orderId: o.id,
     status: o.status,
@@ -46,6 +54,8 @@ export function statusView(o: Order): OrderStatusView {
     runs: o.generation.runs,
     canRetry: o.status === 'failed' && o.generation.runs < MAX_GENERATION_RUNS,
     deliveryMethods: o.deliveryMethods,
+    expiresAt: d.expiresAt,
+    emailStatus: d.email.status,
   };
 }
 
@@ -80,7 +90,10 @@ export async function recoverStuckOrders(store: Store, now = new Date(), staleMs
 /** 이 실행이 아직 주문의 현재 실행인지 (멈춘 것으로 처리된 뒤 늦게 끝난 실행은 결과를 버린다) */
 const isCurrentRun = (o: Order | null, run: number): o is Order => !!o && o.status === 'generating' && o.generation.runs === run;
 
-async function run(store: Store, order: Order, runtime: LlmRuntime): Promise<void> {
+/** 리포트가 완성된 뒤 할 일(결과물 전달, D-033). 실패해도 생성 결과에는 영향이 없다 */
+export type OnDone = (orderId: string) => Promise<void>;
+
+async function run(store: Store, order: Order, runtime: LlmRuntime, onDone?: OnDone): Promise<void> {
   const birth = order.pendingBirth;
   const myRun = order.generation.runs;
   try {
@@ -97,7 +110,11 @@ async function run(store: Store, order: Order, runtime: LlmRuntime): Promise<voi
     await store.saveReport({ orderId: order.id, name: birth.name, birthLabel: birth.label, ...content, createdAt: generatedAt });
     const done = await store.updateOrder(order.id, (o) =>
       isCurrentRun(o, myRun)
-        ? transition(o, 'done', { pendingBirth: null, generation: { ...o.generation, finishedAt: generatedAt, lastFailure: null } })
+        ? withDelivery(transition(o, 'done', { pendingBirth: null, generation: { ...o.generation, finishedAt: generatedAt, lastFailure: null } }), (d) => ({
+            ...d,
+            // 보관 기간은 완성 시각부터 센다(다운로드 링크 만료와 같다)
+            expiresAt: expiryFrom(generatedAt),
+          }))
         : o,
     );
     if (done?.status !== 'done' || done.generation.runs !== myRun) return;
@@ -106,6 +123,7 @@ async function run(store: Store, order: Order, runtime: LlmRuntime): Promise<voi
     } catch (e) {
       if (!(e instanceof IssuanceImmutable)) throw e;
     }
+    if (onDone) await onDone(order.id).catch(() => undefined);
   } catch (e) {
     // 실패 이유 코드만 남긴다(사용자 입력·문장 원문은 남기지 않는다)
     const lastFailure = e instanceof GenerationError ? (e.reason === 'validation' ? 'validation' : 'moderationUnavailable') : 'interrupted';
@@ -126,6 +144,7 @@ export async function startGeneration(
   token: string | null,
   runtimeFor: (order: Order) => LlmRuntime,
   now = new Date(),
+  onDone?: OnDone,
 ): Promise<{ status: OrderStatusView; job: Promise<void> | null }> {
   const order = await recoverIfStale(store, await authorizedOrder(store, orderId, token), now);
   if (order.status === 'created' || order.status === 'refunded') throw new NotPaid();
@@ -137,7 +156,7 @@ export async function startGeneration(
     flag.started = true;
     return transition(o, 'generating', { generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: now.toISOString(), finishedAt: null } });
   });
-  const job = flag.started && updated ? run(store, updated, runtimeFor(updated)) : null;
+  const job = flag.started && updated ? run(store, updated, runtimeFor(updated), onDone) : null;
   return { status: statusView(updated ?? order), job };
 }
 

@@ -5,14 +5,19 @@
 // 시도 횟수를 다 쓰면(서버 MAX_GENERATION_RUNS) 다시 시도 대신 환불 안내를 보여 준다.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReportDocument } from '../../../components/ReportDocument';
+import { DOWNLOAD_LINK_TTL_TEXT, koreanDate } from '../../../config/delivery';
 import type { ReportView } from '../../../report/view';
 import { load, orderHeaders, remove, type SavedOrder } from '../../../web/session';
 
-type Stage = 'payment' | 'writing' | 'done' | 'failed' | 'refunded';
+type Stage = 'payment' | 'writing' | 'done' | 'failed' | 'refunded' | 'expired';
+type EmailStatus = 'none' | 'sending' | 'sent' | 'failed';
 interface StatusView {
   stage: Stage;
+  deliveryMethods: ('pdf' | 'email')[];
   runs: number;
   canRetry: boolean;
+  expiresAt: string | null;
+  emailStatus: EmailStatus;
 }
 
 export const POLL_MS = 1_500;
@@ -81,7 +86,18 @@ function Failed({ orderId, onRetry, autoRetryPending, busy, canRetry }: { orderI
   );
 }
 
-function Delivery({ order, token }: { order: SavedOrder; token: string }) {
+function EmailStatusLine({ status }: { status: EmailStatus }) {
+  if (status === 'sent') return <p style={{ margin: 0 }}>입력하신 이메일로 다운로드 링크를 보냈어요.</p>;
+  if (status === 'failed')
+    return (
+      <p style={{ margin: 0 }}>
+        이메일을 보내지 못했어요. 이 화면에서 PDF를 받거나, 잠시 뒤 <a href="/resend">링크 다시 받기</a>를 해 주세요.
+      </p>
+    );
+  return <p style={{ margin: 0 }}>다운로드 링크를 이메일로 보내고 있어요.</p>;
+}
+
+function Delivery({ order, token, status }: { order: SavedOrder; token: string; status: StatusView | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const download = async () => {
@@ -111,10 +127,16 @@ function Delivery({ order, token }: { order: SavedOrder; token: string }) {
         </button>
       )}
       {order.deliveryMethods.includes('email') && (
-        <div data-testid="email-status">
-          <p style={{ margin: 0 }}>이메일 발송: 준비 중이에요. 메일 발송 기능을 연결하면 입력하신 주소로 다운로드 링크를 보내 드려요.</p>
+        <div data-testid="email-status" data-email-status={status?.emailStatus ?? 'none'}>
+          <EmailStatusLine status={status?.emailStatus ?? 'sending'} />
           <a href="/resend">링크 다시 받기</a>
         </div>
+      )}
+      {status?.expiresAt && (
+        <p className="hint" style={{ margin: 0 }} data-testid="delivery-expiry">
+          {koreanDate(status.expiresAt)}까지(완성일부터 {DOWNLOAD_LINK_TTL_TEXT}) PDF{order.deliveryMethods.includes('email') ? '와 이메일 링크' : ''}를 받을 수 있어요. 그 뒤에는
+          PDF·리포트{order.deliveryMethods.includes('email') ? '·이메일 주소' : ''}를 삭제해요.
+        </p>
       )}
       {error && (
         <div className="error" role="alert">
@@ -141,6 +163,17 @@ export function OrderView({ orderId }: { orderId: string }) {
     setOrder(saved && saved.orderId === orderId ? saved : 'missing');
   }, [orderId]);
 
+  /** 리포트를 받은 뒤 이메일 발송 상태만 다시 본다(최대 40번) */
+  const emailPolls = useRef(0);
+  const refreshStatus = useCallback(async (mine: number) => {
+    if (!token || mine !== seq.current || emailPolls.current++ > 40) return;
+    const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, { headers: orderHeaders(token), cache: 'no-store' });
+    if (!res.ok || mine !== seq.current) return;
+    const s = (await res.json()) as StatusView;
+    setStatus(s);
+    if (s.emailStatus === 'sending' || s.emailStatus === 'none') pollTimer.current = setTimeout(() => void refreshStatus(mine), POLL_MS);
+  }, [orderId, token]);
+
   const poll = useCallback(async (mine: number) => {
     if (!token || mine !== seq.current) return;
     const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, { headers: orderHeaders(token), cache: 'no-store' });
@@ -148,6 +181,10 @@ export function OrderView({ orderId }: { orderId: string }) {
     const s = (await res.json()) as StatusView;
     setStatus(s);
     if (s.stage === 'done') {
+      // 이메일을 보내는 중이면 결과가 나올 때까지 상태만 몇 번 더 본다
+      if (s.emailStatus === 'sending' || (s.deliveryMethods.includes('email') && s.emailStatus === 'none')) {
+        pollTimer.current = setTimeout(() => void refreshStatus(mine), POLL_MS);
+      }
       const r = await fetch(`/api/reports/${encodeURIComponent(orderId)}`, { headers: orderHeaders(token), cache: 'no-store' });
       if (r.ok) {
         setReport(((await r.json()) as { report: ReportView }).report);
@@ -158,9 +195,9 @@ export function OrderView({ orderId }: { orderId: string }) {
       }
       return;
     }
-    if (s.stage === 'failed' || s.stage === 'refunded') return;
+    if (s.stage === 'failed' || s.stage === 'refunded' || s.stage === 'expired') return;
     pollTimer.current = setTimeout(() => void poll(mine), POLL_MS);
-  }, [orderId, token]);
+  }, [orderId, token, refreshStatus]);
 
   const start = useCallback(async () => {
     if (!token) return;
@@ -211,8 +248,19 @@ export function OrderView({ orderId }: { orderId: string }) {
     return (
       <div className="section" data-testid="screen-report" style={{ gap: 20 }}>
         <ReportDocument view={report} mode="screen" />
-        <Delivery order={order} token={order.accessToken} />
+        <Delivery order={order} token={order.accessToken} status={status} />
       </div>
+    );
+  }
+  if (status?.stage === 'expired') {
+    return (
+      <section className="section" data-testid="screen-expired">
+        <h1 className="h1">보관 기간이 지난 주문이에요</h1>
+        <p style={{ margin: 0 }}>리포트가 완성된 날부터 {DOWNLOAD_LINK_TTL_TEXT}이 지나 PDF·리포트·이메일 주소를 삭제했어요.</p>
+        <div className="box">
+          주문번호 <strong>{orderId}</strong>
+        </div>
+      </section>
     );
   }
   if (status?.stage === 'refunded') {
