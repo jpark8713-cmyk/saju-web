@@ -3,6 +3,7 @@
 # 사용(root):
 #   bash -c 'set -a; . /etc/saju/backup.env; set +a; /opt/saju/deploy/restore.sh saju/sqlite/saju-20261021T030000Z.db'
 #   서버에 있는 파일로 복원: restore.sh --local <파일 경로>   (파일은 복사해서 쓰고, 원본은 지우지 않는다)
+#     받는 경로(링크를 푼 실제 경로 기준): 데이터 폴더 안(컨테이너 안에서 앱 권한으로 꺼낸다) 또는 root 전용 가져오기 폴더(LOCAL_IMPORT_DIR) 안.
 # 필요: /etc/saju/backup.env (backup-hourly.sh와 같은 값), 앱 이미지 이름 IMAGE(기본 saju-web:current)
 #
 # 내려받은 사본은 root만 쓰는 준비 폴더(RESTORE_STAGE)에 두고, 컨테이너에는 그 파일 하나만 읽기 전용으로 연결한다.
@@ -16,6 +17,9 @@ DATA_DIR="${DATA_DIR:-/srv/saju/data}"
 IMAGE="${IMAGE:-saju-web:current}"
 STAGE="${RESTORE_STAGE:-/var/lib/saju/restore}"
 APP_UID="${APP_UID:-1000}"
+IMPORT_DIR="${LOCAL_IMPORT_DIR:-/var/lib/saju/import}"
+# 복원할 파일 크기 상한(기본 5GiB). 이보다 크면 받지 않는다(무한히 읽히는 파일로 디스크를 채우지 못하게)
+MAX_BYTES="${MAX_RESTORE_BYTES:-5368709120}"
 
 MODE=remote
 if [ "${1:-}" = "--local" ]; then
@@ -54,9 +58,35 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# 표준 입력을 준비 사본에 쓰되 상한을 넘으면 실패한다
+copy_capped() {
+  head -c "$((MAX_BYTES + 1))" > "$COPY"
+  if [ "$(stat -c %s "$COPY")" -gt "$MAX_BYTES" ]; then
+    echo "복원할 파일이 상한(${MAX_BYTES} bytes)보다 커서 받지 않아요" >&2
+    exit 2
+  fi
+}
+
 if [ "$MODE" = local ]; then
-  [ -f "$SRC" ] || { echo "파일이 없어요: ${SRC}" >&2; exit 2; }
-  cp --no-preserve=all -- "$SRC" "$COPY"
+  # 링크를 모두 푼 실제 경로로 판단한다. 링크가 허용 폴더 밖을 가리키면 거부한다
+  REAL="$(realpath -e -- "$SRC" 2>/dev/null)" || { echo "파일이 없어요: ${SRC}" >&2; exit 2; }
+  DATA_REAL="$(realpath -e -- "$DATA_DIR")"
+  install -d -o root -g root -m 0700 "$IMPORT_DIR"
+  IMPORT_REAL="$(realpath -e -- "$IMPORT_DIR")"
+  case "$REAL" in
+    "$DATA_REAL"/*)
+      # 데이터 폴더는 앱 사용자 소유라 root가 직접 읽지 않는다. 일회용 컨테이너 안에서 앱 사용자 권한으로 꺼낸다
+      # (그 안의 링크는 컨테이너 밖 서버 파일을 가리키지 못한다)
+      REL="${REAL#"$DATA_REAL"/}"
+      docker run --rm --network none -v "${DATA_DIR}:/data:ro" --entrypoint cat "$IMAGE" -- "/data/${REL}" | copy_capped ;;
+    "$IMPORT_REAL"/*)
+      # root 전용 가져오기 폴더: 일반 파일만 받는다
+      [ -f "$REAL" ] && [ ! -L "$REAL" ] || { echo "일반 파일이 아니에요: ${SRC}" >&2; exit 2; }
+      copy_capped < "$REAL" ;;
+    *)
+      echo "--local 파일은 데이터 폴더(${DATA_DIR}) 또는 가져오기 폴더(${IMPORT_DIR}) 안에 있어야 해요(링크를 푼 실제 경로: ${REAL})" >&2
+      exit 2 ;;
+  esac
 else
   : "${BACKUP_BUCKET:?BACKUP_BUCKET이 필요합니다}"
   aws --endpoint-url "$ENDPOINT" s3 cp "s3://${BACKUP_BUCKET}/${SRC}" "$COPY" --only-show-errors

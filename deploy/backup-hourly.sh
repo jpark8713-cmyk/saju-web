@@ -52,13 +52,33 @@ app npm run -s db:prune -- --keep "$(( KEEP_LOCAL > 1 ? KEEP_LOCAL - 1 : 1 ))" -
 # 2) 온라인 백업(서버를 멈추지 않는다). 사본은 파일 하나이고 권한 600이다
 app npm run -s db:backup -- "$IN_CONTAINER"
 LOCAL_SIZE="$(app stat -c %s "$IN_CONTAINER")"
+LOCAL_SHA="$(app sha256sum "$IN_CONTAINER" | cut -d' ' -f1)"
 
-# 3) 컨테이너 안에서 읽어 그대로 올리고, 올린 크기가 같은지 확인한다
-app cat "$IN_CONTAINER" | s3 s3 cp - "s3://${BACKUP_BUCKET}/${PREFIX}/${NAME}" --expected-size "$LOCAL_SIZE" --only-show-errors
-REMOTE_SIZE="$(s3 s3api head-object --bucket "$BACKUP_BUCKET" --key "${PREFIX}/${NAME}" --query ContentLength --output text)"
+# 3) 임시 이름으로 올린다. 읽기가 도중에 실패해도 잘린 파일이 정상 이름으로 남지 않게 한다(D-031)
+#    임시 이름은 .incoming/ 아래 .part다. 확인에 실패하면 그대로 두고 실패로 끝난다(7일 수명 주기가 지운다)
+FINAL_KEY="${PREFIX}/${NAME}"
+TEMP_KEY="${PREFIX}/.incoming/${NAME}.part"
+app cat "$IN_CONTAINER" | s3 s3 cp - "s3://${BACKUP_BUCKET}/${TEMP_KEY}" --expected-size "$LOCAL_SIZE" --only-show-errors
+
+# 4) 올린 것을 확인한다: 크기, 그리고 다시 내려받아 계산한 SHA-256이 컨테이너 안 사본과 같아야 한다
+REMOTE_SIZE="$(s3 s3api head-object --bucket "$BACKUP_BUCKET" --key "$TEMP_KEY" --query ContentLength --output text)"
 if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
-  echo "업로드 크기가 다릅니다: local=${LOCAL_SIZE} remote=${REMOTE_SIZE}" >&2
+  echo "업로드 크기가 달라 정상 이름으로 바꾸지 않았어요: ${TEMP_KEY} (local=${LOCAL_SIZE} remote=${REMOTE_SIZE})" >&2
+  exit 1
+fi
+REMOTE_SHA="$(s3 s3 cp "s3://${BACKUP_BUCKET}/${TEMP_KEY}" - --only-show-errors | sha256sum | cut -d' ' -f1)"
+if [ "$REMOTE_SHA" != "$LOCAL_SHA" ]; then
+  echo "업로드 체크섬이 달라 정상 이름으로 바꾸지 않았어요: ${TEMP_KEY}" >&2
   exit 1
 fi
 
-echo "백업 완료: ${PREFIX}/${NAME} (${LOCAL_SIZE} bytes)"
+# 5) 확인이 끝난 것만 정상 이름으로 복사하고(체크섬을 메타데이터로 남긴다) 임시 이름을 지운다
+s3 s3api copy-object --bucket "$BACKUP_BUCKET" --copy-source "${BACKUP_BUCKET}/${TEMP_KEY}" --key "$FINAL_KEY"   --metadata "sha256=${LOCAL_SHA}" --metadata-directive REPLACE >/dev/null
+FINAL_SIZE="$(s3 s3api head-object --bucket "$BACKUP_BUCKET" --key "$FINAL_KEY" --query ContentLength --output text)"
+if [ "$FINAL_SIZE" != "$LOCAL_SIZE" ]; then
+  echo "정상 이름으로 복사한 크기가 달라요: ${FINAL_KEY}" >&2
+  exit 1
+fi
+s3 s3api delete-object --bucket "$BACKUP_BUCKET" --key "$TEMP_KEY" >/dev/null || echo "임시 이름을 지우지 못했어요(수명 주기가 지워요): ${TEMP_KEY}" >&2
+
+echo "백업 완료: ${FINAL_KEY} (${LOCAL_SIZE} bytes, sha256 ${LOCAL_SHA})"
