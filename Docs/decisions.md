@@ -833,3 +833,10 @@ D-035 리뷰에서 기록만 해 둔 낮은 위험 2건을 고쳤다.
   - 따로 저장하는 `saveReport`는 없앴다.
   - 테스트: "완성 표시 저장이 실패하면 리포트도 남지 않는다(SQLite 트리거로 실패 재현)", "갱신 함수가 null이면 아무것도 바꾸지 않는다(메모리·SQLite)".
 - **PDF 임시 파일:** PDF를 쓰다 서버가 멈추면 `<주문번호>.pdf.<hex>.part`가 남았다. 매시간 정리(`db:purge`)가 한 시간 넘게 지난 임시 파일을 지운다(쓰는 중인 파일은 건드리지 않게, `STALE_PDF_PART_MS`). 정리 결과에 `partFiles` 건수가 붙는다.
+
+## D-037 main 브랜치, 대운수 확정, 자시 대기 (사업자 결정 2026-10-21)
+
+- **브랜치:** 이력이 한 줄이라 병합 없이 `main`을 `ec6f15e`(Phase 5 이후 문서 정리)에 만들었다. Phase 완료 지점에 태그 `phase1`(6b9cebc)·`phase2`(bfcdbe8)·`phase3`(c81f804)·`phase4`(8e42e25)·`phase5`(933f725)를 달고, 기존 브랜치 `phase1-engine`·`phase2-llm`·`phase3-web`은 지웠다. 원격(비공개 GitHub)은 사업자가 주소를 주면 `main`과 태그를 올린다.
+- **올리기 전 점검:** 모든 커밋 이력에 `.env`(예시 파일 `.env.example` 제외)·`samples-output/`·사용자 자료·DB 파일·키 모양 문자열이 없음을 확인했다. 사용자 자료(`design.zip`, `Docs/*.docx`, `결과 리포트*.pdf`)와 로컬 DB(`data/`, `*.db`)를 `.gitignore`에 더했다.
+- **대운수 초 단위 처리: 버림(`floor`) 확정.** D-005의 결정을 그대로 확정하고 Phase 2 넘김 목록(D-024)에서 뺀다.
+- **자시 기본값: 대기.** 사업자가 만세력 앱과 비교해 알려 줄 때까지 지금 값(`split`, D-002)을 쓴다(`Docs/LAUNCH_CHECKLIST.md` 1-8).

@@ -8,6 +8,16 @@ dist/
 .next-*/
 samples-output/
 
+# 사용자 자료 (저장소에 두지 않는다)
+design.zip
+Docs/*.docx
+결과 리포트*.pdf
+
+# 로컬 DB (DATABASE_URL=file:./data/saju.db 등)
+data/
+*.db
+*.db-*
+
 # 키 메모 파일 (저장소에 두지 않는다)
 antropic.txt
 anthropic*.txt
