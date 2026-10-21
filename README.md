@@ -1,0 +1,120 @@
+# saju-web
+
+근거가 보이는 사주 리포트 웹서비스예요. 생년월일시를 넣으면 만세력 엔진이 사주 차트를 계산하고, Claude가 차트의 근거를 붙여 풀이를 써요. 결제하면 리포트를 화면·PDF·이메일 링크로 받아요.
+
+- 스펙: [`SAJU_SPEC.md`](SAJU_SPEC.md)
+- 결정 기록: [`Docs/decisions.md`](Docs/decisions.md) (D-001~)
+- 운영 배포(NCP·Docker·nginx·백업): [`Docs/deploy.md`](Docs/deploy.md)
+- 출시 전 할 일: [`Docs/LAUNCH_CHECKLIST.md`](Docs/LAUNCH_CHECKLIST.md)
+- 화면 디자인 기준: [`DESIGN.md`](DESIGN.md)
+
+## 진행 상황
+
+| Phase | 내용 | 상태 |
+|-------|------|------|
+| 1 | 사주 계산 엔진과 교차검증 (`src/engine`) | 완료 |
+| 2 | LLM 풀이 생성·검수·비용 측정 (`src/llm`) | 완료 (D-024) |
+| 3 | 웹 화면 (`src/app`) | 완료 |
+| 4 | 결제(목 어댑터)·환불 접수·SQLite·배포 구성 | 완료 (D-032). 실제 PG 연동은 사업자·PG 답변 뒤 |
+| 5 | 결과물 전달(PDF 저장·이메일 링크·재발송·보관 기간 정리) | 완료 (D-035·D-036). 실제 메일 서비스 연동은 서비스명·도메인 확정 뒤 |
+
+## 준비물
+
+- **Node.js 26.7.0.** 내장 SQLite(`node:sqlite`)를 써요. 운영 이미지(`Dockerfile`)도 같은 버전이에요.
+- **Chromium (Playwright):** PDF 생성과 화면 테스트에 필요해요.
+  ```bash
+  npx playwright install chromium
+  ```
+- 이 프로젝트의 Next.js는 16.3.8이에요. 예전 버전과 API가 달라요. 코드를 고치기 전에 `node_modules/next/dist/docs/`를 확인해 주세요(`AGENTS.md`).
+
+## 설치
+
+```bash
+npm ci
+npx playwright install chromium
+cp .env.example .env   # 값을 채워요(아래 표). .env는 커밋하지 않아요
+```
+
+## 환경 변수
+
+전체 목록과 설명은 [`.env.example`](.env.example)에 있어요. 운영에서 필요한 값은 `Docs/deploy.md` 2장을 봐 주세요.
+
+| 이름 | 로컬 개발 | 운영 | 설명 |
+|------|-----------|------|------|
+| `LLM_API_KEY` | 실제 풀이를 만들 때만 | 필수 | Claude API 키 |
+| `LLM_MODEL` | 선택 | 선택 | 비우면 `claude-sonnet-5-5` (D-021) |
+| `ENABLE_FAKE_LLM` | `true` 권장 | 쓰지 않음 | 정해진 문장을 돌려주는 가짜 LLM이에요. 비용이 들지 않아요. 개발·테스트에서만 켜져요 |
+| `DATABASE_URL` | 선택 | 필수 | 예: `file:./data/saju.db`. 비우면 메모리 저장소예요. 서버를 끄면 데이터가 사라지고, 운영에서는 시작하지 않아요 |
+| `DB_REQUIRE_VOLUME` | 비움 | 이미지에 고정 | DB 폴더가 Docker 볼륨이 아니면 시작하지 않아요 |
+| `PAYMENT_PROVIDER` | `mock` | 실제 PG 연동 전까지 없음 | 목 결제는 개발·테스트에서만 동작해요(D-028) |
+| `PAYMENT_METHODS_ENABLED` | `kakaopay` | `kakaopay` | 켤 결제 수단(쉼표로 구분) |
+| `APP_ORIGIN` | 선택 | 필수 | 서비스 주소. PDF 생성과 결제 복귀 주소에 써요 |
+| `REFUND_ID_SECRET` | 선택 | 필수 | 환불 접수번호 HMAC 키(32자 이상) |
+| `TRUST_PROXY` | 비움 | `true` | 앞단 nginx가 `X-Real-IP`를 넣을 때만 켜요 |
+| `EMAIL_PROVIDER` | `console` | 미정 (D-033) | `console`은 메일을 보내지 않고 개발용 보관함(`/api/dev/outbox`)에 넣어요 |
+| `DATAGOKR_API_KEY` | 선택 | 쓰지 않음 | 천문연 절기 기준 데이터를 다시 받을 때만 써요(`npm run fetch:kasi`) |
+
+`NODE_ENV=production`이면 목 결제, 가짜 LLM, 콘솔 메일, 개발용 보관함이 모두 꺼져요. 환경 변수와 상관없어요.
+
+## 로컬 실행
+
+```bash
+# 개발 서버 (http://localhost:3000)
+# .env에 PAYMENT_PROVIDER=mock, ENABLE_FAKE_LLM=true를 두면 결제부터 리포트까지 비용 없이 끝까지 돌려 볼 수 있어요
+npm run dev
+
+# 운영 빌드로 실행
+npm run build
+npm start
+```
+
+- 결제 화면에서 결제하면 목 결제창(`/dev/mock-pg`)이 열려요. 결제 성공, 실패, "결제 성공 후 생성 실패"를 골라 흐름을 확인할 수 있어요.
+- 이메일 링크는 `/api/dev/outbox`(개발 전용)에서 확인해요.
+
+## 테스트
+
+```bash
+npm run typecheck    # 타입 검사 (tsc --noEmit)
+npm test             # 단위·통합 테스트 (vitest): 엔진·풀이·저장소·결제·전달·정리
+npm run e2e          # 화면 테스트 (Playwright, 개발 서버 3100번 포트, 임시 SQLite)
+npm run e2e:prod     # 운영 빌드 화면 테스트 (next build + next start, 3200번 포트)
+```
+
+- 테스트는 가짜 LLM과 목 결제를 써서 비용이 들지 않아요.
+- `npm run measure:cost`는 **실제 Claude API를 호출해 요금이 나가요.** 꼭 필요할 때만 돌려요(D-019).
+- 여러 사람(또는 리뷰어)이 동시에 화면 테스트를 돌릴 때는 빌드 폴더와 포트를 나눠요(`CLAUDE.md`):
+  ```bash
+  NEXT_DIST_DIR=.next-r1 PW_PORT=3300 npx playwright test
+  NEXT_DIST_DIR=.next-r1 PW_PORT=3400 npx playwright test -c playwright.prod.config.ts
+  ```
+- 포트를 비울 때는 그 포트를 쓰는 프로세스만 종료해요. Node 전체를 끄는 명령은 쓰지 않아요(`CLAUDE.md`).
+  ```bash
+  netstat -ano | findstr :3100      # 마지막 열이 PID
+  taskkill //PID <PID> //F          # Git Bash
+  ```
+
+## 관리 스크립트
+
+| 명령 | 하는 일 |
+|------|---------|
+| `npm run admin -- …` | 환불 조회·처리, 멈춘 생성 복구 (`Docs/deploy.md` 6장) |
+| `npm run db:backup` / `db:restore` / `db:prune` | SQLite 백업·복원·오래된 사본 정리 (`Docs/deploy.md` 5장) |
+| `npm run db:purge` | 보관 기간이 지난 PDF·리포트·이메일 정리. 운영에서는 매시간 백업 전에 자동으로 돌아요 |
+
+## 폴더 구조
+
+```
+src/engine     사주 계산 엔진 (만세력, 오행, 십신, 대운·세운, 근거)
+src/llm        풀이 생성, 검증, AI 검수, Claude 호출
+src/app        Next.js 화면과 API 라우트
+src/report     리포트 화면·PDF 공통 구성
+src/orders     주문·생성·리포트 접근
+src/payments   결제 어댑터 (목 구현)
+src/admin      환불 처리 등 관리 기능
+src/delivery   PDF 저장, 이메일 링크, 재발송, 보관 기간 정리
+src/store      저장소 (메모리·SQLite, 같은 계약 테스트)
+src/config     가격·주제·결제 수단·보관 기간·법적 문구 설정
+scripts        관리·백업·측정 스크립트
+deploy         nginx, 백업 타이머, 복원 스크립트
+tests          engine / llm / web(vitest), e2e(Playwright)
+```
