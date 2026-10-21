@@ -2,15 +2,17 @@
 // 화면 6(생성 중) → 화면 7(리포트 받기) / 화면 B(생성 실패).
 // 미리보기와 같은 리포트 템플릿(ReportDocument)을 쓰므로, 결제 후 잠겼던 섹션이 같은 자리에서 열린다.
 // 생성은 결제가 확인된 주문만 서버가 시작한다(결제 전이면 409).
+// 시도 횟수를 다 쓰면(서버 MAX_GENERATION_RUNS) 다시 시도 대신 환불 안내를 보여 준다.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReportDocument } from '../../../components/ReportDocument';
 import type { ReportView } from '../../../report/view';
 import { load, orderHeaders, remove, type SavedOrder } from '../../../web/session';
 
-type Stage = 'payment' | 'writing' | 'done' | 'failed';
+type Stage = 'payment' | 'writing' | 'done' | 'failed' | 'refunded';
 interface StatusView {
   stage: Stage;
   runs: number;
+  canRetry: boolean;
 }
 
 export const POLL_MS = 1_500;
@@ -48,19 +50,27 @@ function Progress({ stage, orderId, email }: { stage: Stage; orderId: string; em
   );
 }
 
-function Failed({ orderId, onRetry, autoRetryPending, busy }: { orderId: string; onRetry: () => void; autoRetryPending: boolean; busy: boolean }) {
+function Failed({ orderId, onRetry, autoRetryPending, busy, canRetry }: { orderId: string; onRetry: () => void; autoRetryPending: boolean; busy: boolean; canRetry: boolean }) {
   return (
     <section className="section" data-testid="screen-generation-failed">
       <h1 className="h1">풀이를 만들지 못했어요</h1>
-      <p style={{ margin: 0 }}>잠깐 문제가 생겼어요. 결제는 확인됐고, 다시 시도하면 새로 만들어요.</p>
-      {autoRetryPending && (
+      {canRetry ? (
+        <p style={{ margin: 0 }}>잠깐 문제가 생겼어요. 결제는 확인됐고, 다시 시도하면 새로 만들어요.</p>
+      ) : (
+        <p style={{ margin: 0 }} data-testid="retry-exhausted">
+          여러 번 시도했지만 풀이를 만들지 못했어요. 환불 요청을 남겨 주시면 결제하신 금액을 전액 돌려드려요.
+        </p>
+      )}
+      {canRetry && autoRetryPending && (
         <p className="meta" style={{ margin: 0 }} data-testid="auto-retry-notice">
           10초 뒤에 자동으로 한 번 더 시도해요.
         </p>
       )}
-      <button type="button" className="button" onClick={onRetry} disabled={busy} data-testid="retry-now">
-        지금 다시 시도
-      </button>
+      {canRetry && (
+        <button type="button" className="button" onClick={onRetry} disabled={busy} data-testid="retry-now">
+          지금 다시 시도
+        </button>
+      )}
       <a href={`/refund?orderId=${encodeURIComponent(orderId)}`} className="button secondary" data-testid="go-refund">
         환불 요청
       </a>
@@ -148,7 +158,7 @@ export function OrderView({ orderId }: { orderId: string }) {
       }
       return;
     }
-    if (s.stage === 'failed') return;
+    if (s.stage === 'failed' || s.stage === 'refunded') return;
     pollTimer.current = setTimeout(() => void poll(mine), POLL_MS);
   }, [orderId, token]);
 
@@ -176,7 +186,7 @@ export function OrderView({ orderId }: { orderId: string }) {
 
   // 화면 B: 처음 실패하면 10초 뒤 한 번만 자동으로 다시 시도한다
   useEffect(() => {
-    if (status?.stage !== 'failed' || status.runs > AUTO_RETRY_LIMIT_RUNS) {
+    if (status?.stage !== 'failed' || !status.canRetry || status.runs > AUTO_RETRY_LIMIT_RUNS) {
       setAutoRetryPending(false);
       return;
     }
@@ -205,8 +215,19 @@ export function OrderView({ orderId }: { orderId: string }) {
       </div>
     );
   }
+  if (status?.stage === 'refunded') {
+    return (
+      <section className="section" data-testid="screen-refunded">
+        <h1 className="h1">환불된 주문이에요</h1>
+        <p style={{ margin: 0 }}>이 주문은 환불 처리됐어요. 결제 취소 내역은 결제하신 수단에서 확인할 수 있어요.</p>
+        <div className="box">
+          주문번호 <strong>{orderId}</strong>
+        </div>
+      </section>
+    );
+  }
   if (status?.stage === 'failed') {
-    return <Failed orderId={orderId} onRetry={() => void start()} autoRetryPending={autoRetryPending} busy={busy} />;
+    return <Failed orderId={orderId} onRetry={() => void start()} autoRetryPending={autoRetryPending} busy={busy} canRetry={status.canRetry} />;
   }
   return <Progress stage={status?.stage ?? 'payment'} orderId={orderId} email={order.deliveryMethods.includes('email')} />;
 }

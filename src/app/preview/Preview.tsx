@@ -3,7 +3,6 @@
 // 아래에 풀이 주제·받는 방법·이메일을 고르고 "다음"에서 주문을 만든다(POST /api/orders, 금액은 서버가 다시 계산).
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { PAYMENT_METHODS } from '../../config/paymentMethods';
 import { priceFor } from '../../config/prices';
 import { enabledTopics } from '../../config/topics';
 import { ReportDocument } from '../../components/ReportDocument';
@@ -128,16 +127,15 @@ export function Preview() {
     if (!birth) return router.replace('/input');
     setBusy(true);
     try {
-      // 1차 출시는 켜져 있는 결제 수단이 카카오페이 하나라 그것으로 주문을 만든다(수단 변경은 Phase 4 결제 어댑터와 함께)
-      const paymentMethod = PAYMENT_METHODS.find((m) => m.enabled)?.id ?? '';
+      // 결제 수단은 서버가 켜진 수단 중 첫째로 정하고, 결제 화면에서 바꿀 수 있다
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ birth, topicIds: choices.topicIds, deliveryMethods: choices.deliveryMethods, email: choices.email, paymentMethod }),
+        body: JSON.stringify({ birth, topicIds: choices.topicIds, deliveryMethods: choices.deliveryMethods, email: choices.email }),
       });
       const data = await res.json();
       if (res.status === 201) {
-        save('saju.order', { ...data, topicIds: data.breakdown.topics.map((t: { id: string }) => t.id), deliveryMethods: choices.deliveryMethods, paymentMethod });
+        save('saju.order', { ...data, topicIds: data.breakdown.topics.map((t: { id: string }) => t.id), deliveryMethods: choices.deliveryMethods });
         router.push('/checkout');
       } else {
         setErrors(data.errors ?? { form: '주문을 만들지 못했어요. 잠시 후 다시 시도해 주세요.' });

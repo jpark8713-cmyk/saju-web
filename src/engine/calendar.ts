@@ -67,18 +67,24 @@ function ymd(d: SolarDate): [number, number, number] {
   return [d.year, d.month, d.day];
 }
 
-/** 음력 → 양력. 윤달이 없는 달에 윤달을 지정하면 거부한다 */
+/**
+ * 음력 → 양력. 윤달이 없는 달에 윤달을 지정하면 거부한다.
+ * 지원 범위는 양력 기준이다: 변환한 양력이 범위 밖(예: 음력 2050-11-19 이후 → 양력 2051년)이면 범위 밖으로 거부한다(D-028).
+ */
 export function toSolar(d: LunarDate): SolarDate {
   assertInRange(d.year);
+  let solar: SolarDate | null;
   try {
-    const r = lunarToSolar(d.year, d.month, d.day, d.isLeapMonth);
-    return { ...r.solar };
+    solar = { ...lunarToSolar(d.year, d.month, d.day, d.isLeapMonth).solar };
   } catch (e) {
     if (!isLibraryDateError(e)) throw e;
-    const filled = fillLunarHole(d) ?? findInNextSolarYear(d);
-    if (filled) return filled;
-    throw new CalendarInputError('invalidLunarDate', '존재하지 않는 음력 날짜입니다(윤달 여부를 확인해 주세요)');
+    solar = fillLunarHole(d) ?? findInNextSolarYear(d);
   }
+  // 라이브러리 자료는 양력 2051-01-01에서 끝난다. 음력 2050년 11·12월인데 양력 2050년 안에서 못 찾았으면 양력 2051년 이후다
+  if (!solar && d.year === SUPPORTED_RANGE.maxYear && d.month >= 11 && d.day <= 30) assertInRange(SUPPORTED_RANGE.maxYear + 1);
+  if (!solar) throw new CalendarInputError('invalidLunarDate', '존재하지 않는 음력 날짜입니다(윤달 여부를 확인해 주세요)');
+  assertInRange(solar.year);
+  return solar;
 }
 
 /**
@@ -91,11 +97,22 @@ function findInNextSolarYear(d: LunarDate): SolarDate | null {
   const start: SolarDate = { year: d.year + 1, month: 1, day: 1 };
   for (let i = 0; i <= 60; i++) {
     const s = addDays(start, i);
-    if (s.year > SUPPORTED_RANGE.maxYear) return null;
-    const l = toLunar(s);
+    // 지원 범위 다음 해(2051년)도 찾는다. 찾으면 toSolar가 범위 밖으로 거부한다
+    const l = s.year > SUPPORTED_RANGE.maxYear ? rawLunar(s) : toLunar(s);
+    if (!l) return null;
     if (l.year === d.year && l.month === d.month && l.day === d.day && l.isLeapMonth === d.isLeapMonth) return s;
   }
   return null;
+}
+
+/** 범위 검사 없이 라이브러리로 양력 → 음력 (라이브러리에 자료가 없으면 null) */
+function rawLunar(s: SolarDate): LunarDate | null {
+  try {
+    return { ...solarToLunar(...ymd(s)).lunar };
+  } catch (e) {
+    if (isLibraryDateError(e)) return null;
+    throw e;
+  }
 }
 
 /** 라이브러리 데이터 구멍에 해당하는 음력 날짜인지 확인하고 양력을 돌려준다 */

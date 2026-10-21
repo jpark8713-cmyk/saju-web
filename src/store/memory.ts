@@ -1,11 +1,21 @@
-// 메모리 저장소. 서버를 다시 켜면 비워진다(개발·테스트용, Phase 4에서 DB 구현으로 바꾼다).
-// 개발 서버가 모듈을 다시 불러와도 같은 저장소를 쓰도록 globalThis에 한 번만 만든다.
-import type { Order, RefundRequest, Report, Store } from './types';
+// 메모리 저장소. 서버를 다시 켜면 비워진다(개발·테스트 전용, 운영은 SQLite: src/store/sqlite.ts, D-030).
+// 별도 프로세스(관리 스크립트)와는 데이터를 공유하지 않는다.
+import {
+  IssuanceImmutable,
+  type IssuanceEventType,
+  type IssuanceRecord,
+  type Order,
+  type RefundRequest,
+  type RefundStatus,
+  type Report,
+  type Store,
+} from './types';
 
 export class MemoryStore implements Store {
   private readonly orders = new Map<string, Order>();
   private readonly reports = new Map<string, Report>();
   private readonly refunds = new Map<string, RefundRequest>();
+  private readonly issuances = new Map<string, IssuanceRecord>();
 
   async createOrder(order: Order): Promise<void> {
     if (this.orders.has(order.id)) throw new Error('주문번호 중복');
@@ -25,6 +35,10 @@ export class MemoryStore implements Store {
     return structuredClone(next);
   }
 
+  async listOrdersByStatus(status: Order['status']): Promise<Order[]> {
+    return [...this.orders.values()].filter((o) => o.status === status).map((o) => structuredClone(o));
+  }
+
   async saveReport(report: Report): Promise<void> {
     this.reports.set(report.orderId, structuredClone(report));
   }
@@ -39,17 +53,47 @@ export class MemoryStore implements Store {
     return r ? structuredClone(r) : null;
   }
 
-  async createRefund(refund: RefundRequest): Promise<void> {
-    this.refunds.set(refund.id, structuredClone(refund));
+  async getRefund(id: string): Promise<RefundRequest | null> {
+    const r = this.refunds.get(id);
+    return r ? structuredClone(r) : null;
   }
-}
 
-const KEY = Symbol.for('saju.store');
-type WithStore = typeof globalThis & { [KEY]?: Store };
+  async listRefunds(status?: RefundStatus): Promise<RefundRequest[]> {
+    return [...this.refunds.values()].filter((r) => !status || r.status === status).map((r) => structuredClone(r));
+  }
 
-/** 앱 전체가 쓰는 저장소 (Phase 4에서 DB 구현을 고르는 자리) */
-export function getStore(): Store {
-  const g = globalThis as WithStore;
-  g[KEY] ??= new MemoryStore();
-  return g[KEY];
+  async createRefundIfAbsent(refund: RefundRequest): Promise<RefundRequest> {
+    // await 없이 확인하고 저장하므로 동시에 온 요청 사이에 끼어들 틈이 없다
+    const existing = [...this.refunds.values()].find((x) => x.orderId === refund.orderId);
+    if (existing) return structuredClone(existing);
+    if (this.refunds.has(refund.id)) throw new Error('접수번호 중복');
+    this.refunds.set(refund.id, structuredClone(refund));
+    return structuredClone(refund);
+  }
+
+  async updateRefund(id: string, update: (r: RefundRequest) => RefundRequest): Promise<RefundRequest | null> {
+    const current = this.refunds.get(id);
+    if (!current) return null;
+    const next = update(structuredClone(current));
+    this.refunds.set(id, structuredClone(next));
+    return structuredClone(next);
+  }
+
+  async createIssuance(record: IssuanceRecord): Promise<void> {
+    if (this.issuances.has(record.orderId)) throw new IssuanceImmutable();
+    this.issuances.set(record.orderId, structuredClone(record));
+  }
+
+  async getIssuance(orderId: string): Promise<IssuanceRecord | null> {
+    const r = this.issuances.get(orderId);
+    return r ? structuredClone(r) : null;
+  }
+
+  async appendIssuanceEvent(orderId: string, event: { type: IssuanceEventType; at: string }): Promise<boolean> {
+    const current = this.issuances.get(orderId);
+    if (!current) return false;
+    // 기존 필드는 그대로 두고 사건 목록 끝에만 붙인다
+    this.issuances.set(orderId, { ...current, events: [...current.events, { type: event.type, at: event.at }] });
+    return true;
+  }
 }

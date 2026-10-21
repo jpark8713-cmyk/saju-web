@@ -1,40 +1,18 @@
-// Phase 3 서버 로직: 입력 검증, 주문 생성(서버 계산 금액), 가짜 결제(개발 전용), 생성 후 출생 정보 삭제, 리포트 뷰, 미리보기
+// Phase 3 서버 로직: 입력 검증, 주문 생성(서버 계산 금액), 생성 후 출생 정보 삭제, 리포트 뷰, 미리보기, 재발송
+// 결제(목 어댑터)·환불·발급 기록 등 Phase 4는 payments.test.ts·refunds.test.ts에 있다.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { POST as fakePaymentRoute } from '../../src/app/api/dev/fake-payment/route';
 import { POST as resendRoute, RESEND_MESSAGE } from '../../src/app/api/delivery/resend/route';
-import { isFakeLlmEnabled, isFakePaymentEnabled } from '../../src/config/flags';
+import { isFakeLlmEnabled, isMockPaymentAllowed } from '../../src/config/flags';
 import { PRICES, priceFor } from '../../src/config/prices';
-import { DevFakeTransport, DevPassModerator } from '../../src/llm/devFake';
 import { createOrder, OrderInputError } from '../../src/orders/create';
-import { fakePay, FakePaymentDisabled } from '../../src/orders/fakePayment';
 import { NotPaid, startGeneration } from '../../src/orders/generation';
-import { requestRefund } from '../../src/orders/refund';
 import { reportViewFor } from '../../src/orders/reportAccess';
 import { MemoryStore } from '../../src/store/memory';
 import { validateBirthForm } from '../../src/web/birthForm';
 import { buildPreview } from '../../src/web/preview';
-
-const BIRTH = {
-  name: '홍길동', calendar: 'solar', isLeapMonth: false, year: 1990, month: 5, day: 15,
-  timeUnknown: false, hour: 14, minute: 30, gender: 'female', regionId: 'busan', consent: true,
-};
-const ORDER = (over: Record<string, unknown> = {}) => ({
-  birth: BIRTH, topicIds: ['wealth'], deliveryMethods: ['pdf'], email: null, paymentMethod: 'kakaopay', ...over,
-});
-const devEnv = () => {
-  vi.stubEnv('NODE_ENV', 'development');
-  vi.stubEnv('ENABLE_FAKE_PAYMENT', 'true');
-};
-const runtime = (mode: 'ok' | 'fail' = 'ok') => () => ({ transport: new DevFakeTransport(mode), moderator: new DevPassModerator() });
+import { BIRTH, ORDER, paidOrder, runtime } from './helpers';
 
 afterEach(() => vi.unstubAllEnvs());
-
-async function paidOrder(store: MemoryStore, over: Record<string, unknown> = {}) {
-  devEnv();
-  const o = await createOrder(store, ORDER(over));
-  await fakePay(store, o.orderId, o.accessToken, 'success');
-  return o;
-}
 
 describe('정보 입력 검증 (화면 2와 서버 공통)', () => {
   it('필수값이 비면 칸별 한국어 문구를 돌려준다', () => {
@@ -71,6 +49,22 @@ describe('정보 입력 검증 (화면 2와 서버 공통)', () => {
     const r = buildPreview({ ...BIRTH, calendar: 'lunar', isLeapMonth: true, year: 2023, month: 5, day: 1 });
     expect(r.ok).toBe(false);
     expect(!r.ok && r.errors.date).toContain('음력');
+  });
+});
+
+describe('지원 범위 끝 (양력 2050-12-31까지)', () => {
+  const lunar = (month: number, day: number) => buildPreview({ ...BIRTH, calendar: 'lunar', isLeapMonth: false, year: 2050, month, day });
+  it('양력으로 2050-12-31인 음력 2050-11-18은 받고, 그 다음 날부터는 범위 밖 문구로 거부한다', () => {
+    expect(lunar(11, 18).ok).toBe(true);
+    for (const [m, d] of [[11, 19], [11, 20], [11, 29], [12, 1], [12, 30]] as const) {
+      const r = lunar(m, d);
+      expect(!r.ok && r.errors.date).toBe('1900~2050년 사이로 입력해 주세요.');
+    }
+  });
+
+  it('없는 날(31일)은 범위 밖이 아니라 없는 날짜로 거부한다', () => {
+    const r = lunar(11, 31);
+    expect(!r.ok && r.errors.date).toMatch(/^존재하지 않는/);
   });
 });
 
@@ -113,43 +107,18 @@ describe('가격과 주문 생성', () => {
   });
 });
 
-describe('가짜 결제는 개발 환경에서만', () => {
-  it('NODE_ENV=production이면 환경변수를 켜도 꺼진다', () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('ENABLE_FAKE_PAYMENT', 'true');
-    vi.stubEnv('ENABLE_FAKE_LLM', 'true');
-    expect(isFakePaymentEnabled()).toBe(false);
-    expect(isFakeLlmEnabled()).toBe(false);
+describe('개발 전용 스위치', () => {
+  it('NODE_ENV=production이면 환경변수를 켜도 목 결제·가짜 LLM이 꺼진다', () => {
+    expect(isMockPaymentAllowed({ NODE_ENV: 'production', PAYMENT_PROVIDER: 'mock' })).toBe(false);
+    expect(isFakeLlmEnabled({ NODE_ENV: 'production', ENABLE_FAKE_LLM: 'true' })).toBe(false);
   });
 
   it('development·test가 아닌 NODE_ENV(비어 있음, staging)에서도 꺼진다', () => {
     for (const NODE_ENV of [undefined, '', 'staging', 'Production']) {
-      expect(isFakePaymentEnabled({ NODE_ENV, ENABLE_FAKE_PAYMENT: 'true' })).toBe(false);
+      expect(isMockPaymentAllowed({ NODE_ENV, PAYMENT_PROVIDER: 'mock' })).toBe(false);
       expect(isFakeLlmEnabled({ NODE_ENV, ENABLE_FAKE_LLM: 'true' })).toBe(false);
     }
-    expect(isFakePaymentEnabled({ NODE_ENV: 'development', ENABLE_FAKE_PAYMENT: 'true' })).toBe(true);
-  });
-
-  it('운영 환경에서 가짜 결제 API는 404이고 주문을 바꾸지 않는다', async () => {
-    const store = new MemoryStore();
-    const o = await createOrder(store, ORDER());
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('ENABLE_FAKE_PAYMENT', 'true');
-    const res = await fakePaymentRoute(
-      new Request('http://x/api/dev/fake-payment', {
-        method: 'POST', headers: { 'x-order-token': o.accessToken }, body: JSON.stringify({ orderId: o.orderId, outcome: 'success' }),
-      }),
-    );
-    expect(res.status).toBe(404);
-    await expect(fakePay(store, o.orderId, o.accessToken, 'success')).rejects.toBeInstanceOf(FakePaymentDisabled);
-    expect((await store.getOrder(o.orderId))!.status).toBe('created');
-  });
-
-  it('토큰이 틀리면 결제할 수 없다', async () => {
-    const store = new MemoryStore();
-    const o = await createOrder(store, ORDER());
-    devEnv();
-    await expect(fakePay(store, o.orderId, 'wrong', 'success')).rejects.toThrow();
+    expect(isMockPaymentAllowed({ NODE_ENV: 'development', PAYMENT_PROVIDER: 'mock' })).toBe(true);
   });
 });
 
@@ -235,23 +204,7 @@ describe('무료 미리보기 응답', () => {
   });
 });
 
-describe('환불 요청과 재발송', () => {
-  it('결제 전 주문은 없는 주문과 같은 문구로 거부한다', async () => {
-    const store = new MemoryStore();
-    const o = await createOrder(store, ORDER());
-    const body = { orderId: o.orderId, reason: 'other', email: 'a@example.com' };
-    await expect(requestRefund(store, o.orderId, body)).rejects.toMatchObject({ errors: { orderId: '주문번호를 다시 확인해 주세요.' } });
-  });
-
-  it('같은 주문을 다시 접수하면 기존 접수번호를 돌려준다', async () => {
-    const store = new MemoryStore();
-    const o = await paidOrder(store);
-    const body = { orderId: o.orderId, reason: 'not_generated', email: 'a@example.com' };
-    const a = await requestRefund(store, o.orderId, body);
-    const b = await requestRefund(store, o.orderId, body);
-    expect(b).toEqual({ ...a, duplicate: true });
-  });
-
+describe('재발송', () => {
   it('재발송 응답은 입력과 관계없이 같다', async () => {
     const res = await resendRoute();
     expect(await res.json()).toEqual({ message: RESEND_MESSAGE });

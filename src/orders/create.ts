@@ -1,6 +1,6 @@
 // 주문 생성 (POST /api/orders). 금액은 서버가 가격표로 계산하고, 클라이언트가 보낸 금액은 무시한다(SPEC 5장).
 import { z } from 'zod';
-import { findPaymentMethod } from '../config/paymentMethods';
+import { defaultPaymentMethod, findPaymentMethod } from '../config/paymentMethods';
 import { priceFor, type PriceBreakdown } from '../config/prices';
 import { findTopic } from '../config/topics';
 import { buildChart } from '../engine/chart';
@@ -9,6 +9,7 @@ import type { Store, DeliveryMethod, Order } from '../store/types';
 import { engineErrorToField, validateBirthForm, type FieldErrors } from '../web/birthForm';
 import { birthLabelOf } from '../report/view';
 import { hashToken, newAccessToken, newOrderId } from './ids';
+import { EMPTY_PAYMENT } from './paymentState';
 
 export type OrderField = keyof FieldErrors | 'topics' | 'delivery' | 'email' | 'payment';
 export type OrderErrors = Partial<Record<OrderField, string>>;
@@ -25,7 +26,8 @@ const bodySchema = z.object({
   topicIds: z.array(z.string()),
   deliveryMethods: z.array(z.string()),
   email: z.string().optional().nullable(),
-  paymentMethod: z.string(),
+  /** 비우면 켜진 수단 중 첫째. 결제 화면에서 바꿀 수 있다(결제 준비 때 다시 검증) */
+  paymentMethod: z.string().optional().nullable(),
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -38,9 +40,10 @@ export interface CreatedOrder {
   accessToken: string;
   amount: number;
   breakdown: PriceBreakdown;
+  paymentMethod: string;
 }
 
-function validateChoices(b: z.infer<typeof bodySchema>): { errors: OrderErrors; delivery: DeliveryMethod[]; email: string | null } {
+function validateChoices(b: z.infer<typeof bodySchema>): { errors: OrderErrors; delivery: DeliveryMethod[]; email: string | null; method: string } {
   const errors: OrderErrors = {};
   const unknownTopics = b.topicIds.filter((id) => !findTopic(id)?.enabled);
   if (unknownTopics.length || new Set(b.topicIds).size !== b.topicIds.length) errors.topics = '선택할 수 없는 주제가 있습니다.';
@@ -50,10 +53,10 @@ function validateChoices(b: z.infer<typeof bodySchema>): { errors: OrderErrors; 
   const wantsEmail = delivery.includes('email');
   const email = (b.email ?? '').trim();
   if (wantsEmail && !isValidEmail(email)) errors.email = '이메일 주소를 정확히 입력해 주세요.';
-  const method = findPaymentMethod(b.paymentMethod);
+  const method = b.paymentMethod ? findPaymentMethod(b.paymentMethod) : defaultPaymentMethod();
   if (!method || !method.enabled) errors.payment = '선택할 수 없는 결제 수단입니다.';
   // 이메일 받기를 고르지 않았으면 이메일을 저장하지 않는다
-  return { errors, delivery: delivery as DeliveryMethod[], email: wantsEmail ? email : null };
+  return { errors, delivery: delivery as DeliveryMethod[], email: wantsEmail ? email : null, method: method?.id ?? '' };
 }
 
 export async function createOrder(store: Store, raw: unknown, now = new Date()): Promise<CreatedOrder> {
@@ -83,7 +86,8 @@ export async function createOrder(store: Store, raw: unknown, now = new Date()):
     topicIds: breakdown.topics.map((t) => t.id),
     deliveryMethods: choice.delivery,
     email: choice.email,
-    paymentMethod: body.data.paymentMethod,
+    paymentMethod: choice.method,
+    payment: { ...EMPTY_PAYMENT },
     referenceYear,
     createdAt: now.toISOString(),
     paidAt: null,
@@ -92,5 +96,5 @@ export async function createOrder(store: Store, raw: unknown, now = new Date()):
     devForceGenerationFailure: false,
   };
   await store.createOrder(order);
-  return { orderId: order.id, accessToken, amount: order.amount, breakdown };
+  return { orderId: order.id, accessToken, amount: order.amount, breakdown, paymentMethod: order.paymentMethod };
 }

@@ -13,4 +13,6 @@ export const BUSINESS = Object.freeze({
   mailOrderNumber: '[통신판매업 신고번호]',
   address: '[주소]',
   contact: '[연락처]',
+  /** 고객센터 이메일. 기기를 바꿔 환불 접수가 안 되는 고객이 주문번호와 결제 내역을 보내는 곳(D-028) */
+  supportEmail: '[고객센터 이메일]',
 });

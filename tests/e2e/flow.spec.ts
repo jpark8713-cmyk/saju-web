@@ -1,4 +1,5 @@
-// Phase 3 완료 기준을 화면에서 확인한다(개발 서버, 가짜 결제·가짜 LLM).
+// Phase 3·4 완료 기준을 화면에서 확인한다(개발 서버, 목 결제 어댑터·가짜 LLM).
+// 개발 서버는 결제 수단 설정에서 토스페이를 더 켜 둔다(설정으로 수단이 열리는지 확인). 기본 설정(카카오페이만)은 prod.spec.ts가 확인한다.
 import { expect, test } from '@playwright/test';
 import { expectFooter, expectNoHorizontalScroll, fillBirth, pay, toCheckout, toPreview } from './helpers';
 
@@ -25,7 +26,8 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   await expectFooter(page);
   await expectNoHorizontalScroll(page);
   await expect(page.getByTestId('pay-button')).toBeDisabled();
-  await expect(page.getByTestId('method-tosspay')).toContainText('준비 중');
+  await expect(page.getByTestId('method-naverpay')).toContainText('준비 중');
+  await expect(page.getByTestId('method-naverpay').locator('input')).toBeDisabled();
   await pay(page, 'success');
 
   await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
@@ -179,7 +181,7 @@ test('오류 A: 결제 실패 → 사유 표시, 다시 결제·미리보기 복
   await page.getByTestId('preview-next').click();
   await pay(page, 'fail');
   await expect(page.getByTestId('screen-pay-failed')).toBeVisible();
-  await expect(page.getByTestId('pay-failure-reason')).toContainText('승인되지 않았습니다');
+  await expect(page.getByTestId('pay-failure-reason')).toContainText('결제 창에서 결제를 취소했어요');
   await expectFooter(page);
   await page.getByRole('link', { name: '미리보기로 돌아가기' }).click();
   await expect(page.getByRole('heading', { name: '김철수님의 사주' })).toBeVisible();
@@ -201,6 +203,9 @@ test('오류 B → D → E: 생성 실패, 다시 시도, 환불 요청(주문�
   await expect(page.getByTestId('screen-refund')).toBeVisible();
   const orderId = await page.getByTestId('refund-order-id').inputValue();
   expect(orderId).toMatch(/^SJ\d{8}-/);
+  // 결제한 탭이라 주문 토큰으로 본인 확인이 된다
+  await expect(page.getByTestId('refund-device-verified')).toBeVisible();
+  await expect(page.getByTestId('refund-order-email-field')).toHaveCount(0);
   await expect(page.getByTestId('refund-submit')).toBeDisabled();
   await page.getByTestId('refund-email').fill('bad');
   await expect(page.getByText('처리 결과를 받을 이메일 주소를 정확히 입력해 주세요.')).toBeVisible();
@@ -209,7 +214,79 @@ test('오류 B → D → E: 생성 실패, 다시 시도, 환불 요청(주문�
   await expect(page.getByTestId('screen-refund-done')).toBeVisible();
   await expect(page.getByTestId('refund-id')).toHaveText(/^RF\d{8}-/);
   await expect(page.getByTestId('screen-refund-done')).toContainText(orderId);
+  await expect(page.getByTestId('refund-ack')).toContainText('확인 결과는 이메일로 알려드려요.');
   await expectFooter(page);
+});
+
+test('결제창에서 금액을 바꾸면 승인하지 않고 화면 A로 간다(생성도 시작되지 않음)', async ({ page, request }) => {
+  await toPreview(page);
+  await toCheckout(page, []);
+  await pay(page, 'success', { amount: 100 });
+  await expect(page.getByTestId('screen-pay-failed')).toBeVisible();
+  await expect(page.getByTestId('pay-failure-reason')).toContainText('결제 금액이 주문 금액과 달라');
+  const order = await page.evaluate(() => JSON.parse(sessionStorage.getItem('saju.order')!));
+  const gen = await request.post('/api/reports/generate', { headers: { 'x-order-token': order.accessToken }, data: { orderId: order.orderId } });
+  expect(gen.status()).toBe(409);
+  // 다시 결제하면 정상 금액으로 결제된다
+  await page.getByTestId('retry-payment').click();
+  await pay(page, 'success');
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+});
+
+test('승인 화면을 다시 열어 같은 승인 요청이 다시 가도 결제·생성은 한 번', async ({ page, request }) => {
+  await toPreview(page);
+  await toCheckout(page, []);
+  const visited: string[] = [];
+  page.on('framenavigated', (f) => {
+    if (f === page.mainFrame()) visited.push(f.url());
+  });
+  await pay(page, 'success');
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  const completeUrl = visited.find((u) => u.includes('/checkout/complete?'))!;
+  expect(completeUrl).toContain('paymentKey=');
+  // 결제창 복귀 주소를 다시 열면 같은 결제 키로 승인 요청이 한 번 더 간다
+  await page.goto(completeUrl);
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  const order = await page.evaluate(() => JSON.parse(sessionStorage.getItem('saju.order')!));
+  const status = await (await request.get(`/api/orders/${order.orderId}/status`, { headers: { 'x-order-token': order.accessToken } })).json();
+  expect(status).toMatchObject({ status: 'done', runs: 1 });
+  // 다른 결제 키로 온 승인 요청은 거부된다
+  const other = await request.post('/api/payments/confirm', { headers: { 'x-order-token': order.accessToken }, data: { orderId: order.orderId, paymentKey: 'mock_other', amount: order.amount } });
+  expect(other.status()).toBe(400);
+});
+
+test('설정에서 켠 토스페이로 고르고 결제할 수 있다', async ({ page }) => {
+  await toPreview(page);
+  await toCheckout(page, []);
+  await expect(page.getByTestId('method-tosspay').locator('input')).toBeEnabled();
+  await pay(page, 'success', { method: 'tosspay' });
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('saju.order')!).paymentMethod)).toBe('tosspay');
+});
+
+test('다른 기기(새 브라우저)에서 환불 화면: 주문 이메일 칸과 고객센터 안내, 응답은 같은 모양', async ({ page, browser }) => {
+  await toPreview(page);
+  await toCheckout(page, []);
+  await pay(page, 'success');
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  const orderId = await page.evaluate(() => JSON.parse(sessionStorage.getItem('saju.order')!).orderId as string);
+
+  const other = await browser.newPage();
+  try {
+    await other.goto(`/refund?orderId=${orderId}`);
+    await expect(other.getByTestId('refund-order-email-field')).toBeVisible();
+    await expect(other.getByTestId('refund-other-device')).toContainText('고객센터 이메일');
+    await expect(other.getByTestId('refund-other-device')).toContainText('결제 내역');
+    await other.getByTestId('refund-order-email').fill('nobody@example.com');
+    await other.getByTestId('refund-email').fill('reply@example.com');
+    await other.getByTestId('refund-submit').click();
+    await expect(other.getByTestId('screen-refund-done')).toBeVisible();
+    await expect(other.getByTestId('refund-id')).toHaveText(/^RF\d{8}-[A-Z2-9]{8}$/);
+    await expect(other.getByTestId('refund-ack')).toContainText('확인 결과는 이메일로 알려드려요.');
+    await expectNoHorizontalScroll(other);
+  } finally {
+    await other.close();
+  }
 });
 
 test('오류 C: 만료 링크 → 링크 다시 받기, 같은 안내 문구', async ({ page }) => {

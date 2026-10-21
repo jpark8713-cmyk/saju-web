@@ -1,0 +1,12 @@
+# /etc/systemd/system/saju-backup.timer — 매시 정각 백업 (D-030)
+# 켜기: sudo systemctl enable --now saju-backup.timer / 확인: systemctl list-timers saju-backup.timer
+[Unit]
+Description=Run saju-backup.service hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

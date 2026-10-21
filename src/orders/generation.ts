@@ -1,11 +1,15 @@
 // 리포트 생성 (POST /api/reports/generate). 결제(paid)된 주문만, 실패(failed)한 주문은 재시도로 허용한다.
-// 생성은 백그라운드로 돌고 화면 6이 상태를 조회한다. 성공하면 출생 정보를 지운다(SPEC 1장 보관 정책).
+// 생성은 백그라운드로 돌고 화면 6이 상태를 조회한다. 성공하면 출생 정보를 지우고 발급 기록을 만든다(SPEC 1장·Phase 4).
+// 서버가 생성 도중 멈춰 "생성 중"에 오래 머문 주문은 실패로 바꿔 재시도나 환불로 이어지게 한다(D-027, D-028).
+import { MAX_GENERATION_RUNS, STALE_GENERATION_MS } from '../config/generation';
 import { buildChart } from '../engine/chart';
 import { buildEvidence } from '../engine/evidence';
 import { GenerationError, generateReport } from '../llm/generate';
 import type { LlmRuntime } from '../llm/runtime';
-import type { Order, Store } from '../store/types';
+import { IssuanceImmutable, type Order, type Store } from '../store/types';
 import { authorizedOrder } from './access';
+import { buildIssuance } from './issuance';
+import { canTransition, transition } from './stateMachine';
 
 export class NotPaid extends Error {
   constructor() {
@@ -14,22 +18,71 @@ export class NotPaid extends Error {
   }
 }
 
+export class RetryLimitReached extends Error {
+  constructor() {
+    super('생성 시도 횟수를 모두 썼습니다');
+    this.name = 'RetryLimitReached';
+  }
+}
+
 export interface OrderStatusView {
   orderId: string;
   status: Order['status'];
-  /** 화면 6의 단계: 결제 확인 → 풀이 작성 → 완료 / 실패 */
-  stage: 'payment' | 'writing' | 'done' | 'failed';
+  /** 화면 6의 단계: 결제 확인 → 풀이 작성 → 완료 / 실패, 환불됨 */
+  stage: 'payment' | 'writing' | 'done' | 'failed' | 'refunded';
   runs: number;
+  /** 실패했을 때 다시 시도할 수 있는지 */
+  canRetry: boolean;
   deliveryMethods: Order['deliveryMethods'];
 }
 
 export function statusView(o: Order): OrderStatusView {
-  const stage = o.status === 'done' ? 'done' : o.status === 'failed' ? 'failed' : o.status === 'generating' ? 'writing' : 'payment';
-  return { orderId: o.id, status: o.status, stage, runs: o.generation.runs, deliveryMethods: o.deliveryMethods };
+  const stage =
+    o.status === 'done' ? 'done' : o.status === 'failed' ? 'failed' : o.status === 'generating' ? 'writing' : o.status === 'refunded' ? 'refunded' : 'payment';
+  return {
+    orderId: o.id,
+    status: o.status,
+    stage,
+    runs: o.generation.runs,
+    canRetry: o.status === 'failed' && o.generation.runs < MAX_GENERATION_RUNS,
+    deliveryMethods: o.deliveryMethods,
+  };
 }
+
+function isStale(o: Order, now: Date, staleMs: number): boolean {
+  if (o.status !== 'generating' || !o.generation.startedAt) return false;
+  return now.getTime() - Date.parse(o.generation.startedAt) > staleMs;
+}
+
+/** 오래 멈춘 "생성 중" 주문이면 실패(interrupted)로 바꾼다. 바뀐(또는 그대로인) 주문을 돌려준다 */
+export async function recoverIfStale(store: Store, order: Order, now = new Date(), staleMs = STALE_GENERATION_MS): Promise<Order> {
+  if (!isStale(order, now, staleMs)) return order;
+  const updated = await store.updateOrder(order.id, (o) =>
+    isStale(o, now, staleMs) ? transition(o, 'failed', { generation: { ...o.generation, finishedAt: now.toISOString(), lastFailure: 'interrupted' } }) : o,
+  );
+  return updated ?? order;
+}
+
+/**
+ * 멈춘 생성 주문을 모두 찾아 실패로 바꾼다. 바꾼 주문번호를 돌려준다.
+ * 관리 스크립트는 기본 기준(10분)을 쓰고, 서버 시작 때는 staleMs=-1로 "생성 중" 전부를 바꾼다
+ * (서버 한 대에서 생성은 서버 프로세스 안에서만 돌므로, 켜는 순간 남아 있는 "생성 중"은 모두 죽은 실행이다).
+ */
+export async function recoverStuckOrders(store: Store, now = new Date(), staleMs = STALE_GENERATION_MS): Promise<string[]> {
+  const recovered: string[] = [];
+  for (const o of await store.listOrdersByStatus('generating')) {
+    const after = await recoverIfStale(store, o, now, staleMs);
+    if (after.status === 'failed') recovered.push(o.id);
+  }
+  return recovered;
+}
+
+/** 이 실행이 아직 주문의 현재 실행인지 (멈춘 것으로 처리된 뒤 늦게 끝난 실행은 결과를 버린다) */
+const isCurrentRun = (o: Order | null, run: number): o is Order => !!o && o.status === 'generating' && o.generation.runs === run;
 
 async function run(store: Store, order: Order, runtime: LlmRuntime): Promise<void> {
   const birth = order.pendingBirth;
+  const myRun = order.generation.runs;
   try {
     if (!birth) throw new Error('출생 정보가 없습니다');
     const chart = buildChart(birth.input, { referenceYear: order.referenceYear });
@@ -38,21 +91,28 @@ async function run(store: Store, order: Order, runtime: LlmRuntime): Promise<voi
       chart, evidence, topicIds: order.topicIds, referenceYear: order.referenceYear,
       transport: runtime.transport, moderator: runtime.moderator,
     });
-    await store.saveReport({
-      orderId: order.id, name: birth.name, birthLabel: birth.label, chart, evidence, body: result.body,
-      createdAt: new Date().toISOString(),
-    });
-    await store.updateOrder(order.id, (o) => ({
-      ...o, status: 'done', pendingBirth: null,
-      generation: { ...o.generation, finishedAt: new Date().toISOString(), lastFailure: null },
-    }));
+    if (!isCurrentRun(await store.getOrder(order.id), myRun)) return;
+    const generatedAt = new Date().toISOString();
+    const content = { chart, evidence, body: result.body };
+    await store.saveReport({ orderId: order.id, name: birth.name, birthLabel: birth.label, ...content, createdAt: generatedAt });
+    const done = await store.updateOrder(order.id, (o) =>
+      isCurrentRun(o, myRun)
+        ? transition(o, 'done', { pendingBirth: null, generation: { ...o.generation, finishedAt: generatedAt, lastFailure: null } })
+        : o,
+    );
+    if (done?.status !== 'done' || done.generation.runs !== myRun) return;
+    try {
+      await store.createIssuance(buildIssuance(done, content, generatedAt));
+    } catch (e) {
+      if (!(e instanceof IssuanceImmutable)) throw e;
+    }
   } catch (e) {
     // 실패 이유 코드만 남긴다(사용자 입력·문장 원문은 남기지 않는다)
     const lastFailure = e instanceof GenerationError ? (e.reason === 'validation' ? 'validation' : 'moderationUnavailable') : 'interrupted';
     // 실패하면 출생 정보는 재시도 동안만 남긴다
-    await store.updateOrder(order.id, (o) => ({
-      ...o, status: 'failed', generation: { ...o.generation, finishedAt: new Date().toISOString(), lastFailure },
-    }));
+    await store.updateOrder(order.id, (o) =>
+      isCurrentRun(o, myRun) ? transition(o, 'failed', { generation: { ...o.generation, finishedAt: new Date().toISOString(), lastFailure } }) : o,
+    );
   }
 }
 
@@ -65,15 +125,23 @@ export async function startGeneration(
   orderId: string,
   token: string | null,
   runtimeFor: (order: Order) => LlmRuntime,
+  now = new Date(),
 ): Promise<{ status: OrderStatusView; job: Promise<void> | null }> {
-  const order = await authorizedOrder(store, orderId, token);
+  const order = await recoverIfStale(store, await authorizedOrder(store, orderId, token), now);
   if (order.status === 'created' || order.status === 'refunded') throw new NotPaid();
+  if (order.status === 'failed' && order.generation.runs >= MAX_GENERATION_RUNS) throw new RetryLimitReached();
   const flag = { started: false };
   const updated = await store.updateOrder(orderId, (o) => {
-    if (o.status !== 'paid' && o.status !== 'failed') return o;
+    if ((o.status !== 'paid' && o.status !== 'failed') || !canTransition(o.status, 'generating')) return o;
+    if (o.generation.runs >= MAX_GENERATION_RUNS) return o;
     flag.started = true;
-    return { ...o, status: 'generating', generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: new Date().toISOString(), finishedAt: null } };
+    return transition(o, 'generating', { generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: now.toISOString(), finishedAt: null } });
   });
   const job = flag.started && updated ? run(store, updated, runtimeFor(updated)) : null;
   return { status: statusView(updated ?? order), job };
+}
+
+/** 상태 조회 (화면 6). 멈춘 생성이면 실패로 바꿔서 보여 준다 */
+export async function orderStatus(store: Store, orderId: string, token: string | null, now = new Date()): Promise<OrderStatusView> {
+  return statusView(await recoverIfStale(store, await authorizedOrder(store, orderId, token), now));
 }

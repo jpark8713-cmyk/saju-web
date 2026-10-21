@@ -1,6 +1,11 @@
-// 화면 흐름 테스트(개발 서버). 가짜 결제·가짜 LLM을 켜서 비용 없이 전체 흐름을 돈다.
-// 운영 빌드 확인(가짜 결제가 없는지)은 playwright.prod.config.ts에서 따로 돈다.
+// 화면 흐름 테스트(개발 서버). 목 결제 어댑터·가짜 LLM을 켜서 비용 없이 전체 흐름을 돈다.
+// 운영 빌드 확인(목 결제가 없는지)은 playwright.prod.config.ts에서 따로 돈다.
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+
+// 실행마다 새 SQLite 파일을 쓴다(운영과 같은 저장소 구현으로 흐름을 돈다, D-030)
+const DB = join(tmpdir(), `saju-e2e-dev-${Date.now()}.db`);
 
 const PORT = 3100;
 
@@ -20,6 +25,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}`,
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { ENABLE_FAKE_PAYMENT: 'true', ENABLE_FAKE_LLM: 'true' },
+    env: { DATABASE_URL: `file:${DB}`, PAYMENT_PROVIDER: 'mock', PAYMENT_METHODS_ENABLED: 'kakaopay,tosspay', ENABLE_FAKE_LLM: 'true' },
   },
 });

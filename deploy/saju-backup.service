@@ -1,0 +1,10 @@
+# /etc/systemd/system/saju-backup.service — 매시간 SQLite 백업 (saju-backup.timer가 부른다, D-030)
+[Unit]
+Description=Saju SQLite hourly backup to NCP Object Storage
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/saju/backup.env
+ExecStart=/opt/saju/deploy/backup-hourly.sh

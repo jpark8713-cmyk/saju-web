@@ -46,11 +46,19 @@ export async function toCheckout(page: Page, topics: string[] = ['wealth']): Pro
   await expect(page.getByTestId('screen-checkout')).toBeVisible();
 }
 
-/** 화면 5에서 가짜 결제 */
-export async function pay(page: Page, outcome: 'success' | 'fail' | 'success-genfail' = 'success'): Promise<void> {
+/** 화면 5에서 결제하기 → 목 결제창에서 인증(개발 서버의 목 결제 어댑터, D-028) */
+export async function pay(
+  page: Page,
+  outcome: 'success' | 'fail' | 'success-genfail' = 'success',
+  opts: { method?: string; amount?: number } = {},
+): Promise<void> {
   await page.getByTestId('agree-terms').check();
-  await page.getByTestId(`fake-${outcome}`).check();
+  if (opts.method) await page.getByTestId(`method-${opts.method}`).locator('input').check();
   await page.getByTestId('pay-button').click();
+  await expect(page.getByTestId('mock-pg')).toBeVisible();
+  if (opts.amount !== undefined) await page.getByTestId('mock-pg-amount').fill(String(opts.amount));
+  await page.getByTestId(`mock-pg-${outcome}`).check();
+  await page.getByTestId('mock-pg-submit').click();
 }
 
 /** 가로 스크롤이 생기지 않았는지 */

@@ -6,7 +6,7 @@ import { Footer } from '../../../../components/Footer';
 import { ReportDocument } from '../../../../components/ReportDocument';
 import { ORDER_TOKEN_HEADER } from '../../../../orders/access';
 import { reportViewFor } from '../../../../orders/reportAccess';
-import { getStore } from '../../../../store/memory';
+import { getStore } from '../../../../store';
 
 export default async function PrintPage(props: PageProps<'/report/[orderId]/print'>) {
   const { orderId } = await props.params;
