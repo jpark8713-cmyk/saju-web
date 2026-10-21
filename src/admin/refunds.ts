@@ -81,7 +81,8 @@ async function cancelPayment(store: Store, provider: PaymentProvider | null, ord
   }
   await store.updateOrder(order.id, (o) =>
     canTransition(o.status, 'refunded')
-      ? transition(o, 'refunded', { pendingBirth: null, payment: { ...o.payment, stage: 'cancelled', cancelledAt } })
+      ? // 환불된 주문의 이메일은 환불 처리 때 바로 지운다(D-034)
+        transition(o, 'refunded', { pendingBirth: null, email: null, payment: { ...o.payment, stage: 'cancelled', cancelledAt } })
       : o,
   );
   return cancelledAmount;
@@ -102,8 +103,10 @@ export async function processRefund(store: Store, provider: PaymentProvider | nu
     status: input.outcome,
     processedAt: now.toISOString(),
     result: { outcome: input.outcome, note: input.note, cancelledAmount },
-    // 처리가 끝나면 회신 이메일을 지운다
+    // 처리(회신)가 끝나면 회신 이메일을 지운다. 고객이 적은 상세 내용도 지운다.
+    // 남기는 것: 접수번호·주문번호·사유·처리 결과·일시(D-034)
     email: null,
+    detail: null,
   }));
   if (!updated) throw new AdminError('접수 기록을 저장하지 못했어요');
   return updated;

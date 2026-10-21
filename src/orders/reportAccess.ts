@@ -22,7 +22,9 @@ export class ReportExpired extends Error {
 }
 
 async function viewOf(store: Store, order: Order): Promise<ReportView> {
-  if (deliveryOf(order).purgedAt) throw new ReportExpired();
+  const d = deliveryOf(order);
+  // 정리 전이라도 보관 기간이 지났으면 보여 주지 않는다(이메일 링크와 같은 기준, D-034)
+  if (d.purgedAt || (d.expiresAt && Date.parse(d.expiresAt) <= Date.now())) throw new ReportExpired();
   const report = order.status === 'done' ? await store.getReport(order.id) : null;
   if (!report) throw new ReportNotReady();
   return buildReportView({

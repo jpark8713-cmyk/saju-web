@@ -9,6 +9,12 @@ export const DOWNLOAD_LINK_TTL_MS = DOWNLOAD_LINK_TTL_DAYS * 86_400_000;
 /** 화면·이메일에 쓰는 기간 문구 (예: "30일") */
 export const DOWNLOAD_LINK_TTL_TEXT = `${DOWNLOAD_LINK_TTL_DAYS}일`;
 
+/**
+ * 완성되지 않은 주문(결제 전·생성 실패 등)의 이메일 주소 보관 기간(일). 주문을 만든 날부터 센다(사업자 결정 2026-10-21, D-034).
+ * 환불된 주문의 이메일은 환불 처리 때 바로 지운다.
+ */
+export const UNFINISHED_ORDER_EMAIL_RETENTION_DAYS = 30;
+
 /** 메일 발송 시도 횟수(첫 시도 포함, SPEC: 최대 3회) */
 export const EMAIL_MAX_ATTEMPTS = 3;
 

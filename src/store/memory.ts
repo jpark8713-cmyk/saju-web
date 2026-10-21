@@ -59,7 +59,8 @@ export class MemoryStore implements Store {
 
   async listOrdersToPurge(now: Date): Promise<Order[]> {
     return [...this.orders.values()]
-      .filter((o) => o.delivery?.expiresAt && !o.delivery.purgedAt && Date.parse(o.delivery.expiresAt) <= now.getTime())
+      .filter((o) => o.delivery?.expiresAt && Date.parse(o.delivery.expiresAt) <= now.getTime())
+      .filter((o) => !o.delivery?.purgedAt || !!o.email || !!o.pendingBirth || this.reports.has(o.id))
       .map((o) => structuredClone(o));
   }
 
@@ -77,15 +78,26 @@ export class MemoryStore implements Store {
     return t ? structuredClone(t) : null;
   }
 
-  async revokeDownloadTokens(orderId: string, at: string): Promise<number> {
+  async revokeDownloadTokens(orderId: string, at: string, exceptHash?: string): Promise<number> {
     let n = 0;
     for (const [k, t] of this.downloadTokens) {
-      if (t.orderId === orderId && !t.revokedAt) {
+      if (t.orderId === orderId && !t.revokedAt && k !== exceptHash) {
         this.downloadTokens.set(k, { ...t, revokedAt: at });
         n += 1;
       }
     }
     return n;
+  }
+
+  async revokeDownloadToken(tokenHash: string, at: string): Promise<void> {
+    const t = this.downloadTokens.get(tokenHash);
+    if (t && !t.revokedAt) this.downloadTokens.set(tokenHash, { ...t, revokedAt: at });
+  }
+
+  async listUnfinishedOrdersWithEmail(createdBefore: Date): Promise<Order[]> {
+    return [...this.orders.values()]
+      .filter((o) => o.status !== 'done' && !!o.email && Date.parse(o.createdAt) <= createdBefore.getTime())
+      .map((o) => structuredClone(o));
   }
 
   async appendDeliveryLog(log: DeliveryLog): Promise<void> {

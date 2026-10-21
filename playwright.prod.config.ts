@@ -6,7 +6,8 @@ import { defineConfig, devices } from '@playwright/test';
 // 실행마다 새 SQLite 파일을 쓴다(운영과 같은 저장소 구현으로 흐름을 돈다, D-030)
 const DB = join(tmpdir(), `saju-e2e-prod-${Date.now()}.db`);
 
-const PORT = 3200;
+// 리뷰어를 동시에 돌릴 때는 PW_PORT로 포트를, NEXT_DIST_DIR로 빌드 폴더를 달리 준다(D-035)
+const PORT = Number(process.env.PW_PORT || 3200);
 
 export default defineConfig({
   testDir: 'tests/e2e',

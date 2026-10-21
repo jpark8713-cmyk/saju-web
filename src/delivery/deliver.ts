@@ -48,57 +48,105 @@ export function isDeliverable(o: Order, now: Date): boolean {
 
 /** 인쇄 페이지에 온 내부 토큰이 이 주문의 것이고 아직 유효한지 */
 export function renderTokenMatches(o: Order, token: string | null, now = new Date()): boolean {
-  const t = deliveryOf(o).renderToken;
-  return !!t && Date.parse(t.expiresAt) > now.getTime() && tokenMatches(token, t.hash);
+  return deliveryOf(o).renderTokens.some((t) => Date.parse(t.expiresAt) > now.getTime() && tokenMatches(token, t.hash));
 }
 
-// 같은 주문의 PDF를 동시에 두 번 만들지 않는다(서버 한 대 기준)
-const inflight = new Map<string, Promise<Buffer>>();
+class PdfExpired extends Error {
+  constructor() {
+    super('보관 기간이 지나 PDF를 만들지 않습니다');
+    this.name = 'PdfExpired';
+  }
+}
+
+// 같은 주문의 PDF를 동시에 두 번 만들지 않는다. 개발 서버가 모듈을 다시 불러와도 같은 표를 쓰도록 globalThis에 둔다(D-034)
+const INFLIGHT = Symbol.for('saju.pdfInflight');
+type WithInflight = typeof globalThis & { [INFLIGHT]?: Map<string, Promise<Buffer>> };
+const inflight = () => ((globalThis as WithInflight)[INFLIGHT] ??= new Map());
+
+/** 보관 기간이 지났거나 정리된 주문이면 PDF를 만들거나 남기지 않는다 */
+async function stillKeepable(store: Store, orderId: string, now: Date): Promise<boolean> {
+  const o = await store.getOrder(orderId);
+  const d = o ? deliveryOf(o) : null;
+  return !!o && !!d && !d.purgedAt && (!d.expiresAt || Date.parse(d.expiresAt) > now.getTime());
+}
+
+/** 테스트에서 동시 생성을 재현할 때만 직접 부른다(보통은 ensureStoredPdf) */
+export async function renderAndStore(deps: DeliveryDeps, orderId: string): Promise<Buffer> {
+  const raw = newAccessToken();
+  const mine = hashToken(raw);
+  const issued = nowOf(deps);
+  // 이 생성만 쓰는 토큰을 더한다. 다른 생성의 토큰은 건드리지 않는다
+  await deps.store.updateOrder(orderId, (o) =>
+    withDelivery(o, (d) => ({
+      ...d,
+      renderTokens: [...d.renderTokens.filter((t) => Date.parse(t.expiresAt) > issued.getTime()), { hash: mine, expiresAt: new Date(issued.getTime() + RENDER_TOKEN_TTL_MS).toISOString() }],
+    })),
+  );
+  const dropMine = (patch: (d: ReturnType<typeof deliveryOf>) => ReturnType<typeof deliveryOf>) =>
+    deps.store.updateOrder(orderId, (o) => withDelivery(o, (d) => patch({ ...d, renderTokens: d.renderTokens.filter((t) => t.hash !== mine) })));
+  try {
+    const pdf = await deps.renderPdf(deps.origin(), orderId, raw);
+    // 만드는 사이에 보관 기간 정리가 돌았으면 저장하지 않는다(정리 뒤에 PDF가 남지 않게)
+    if (!(await stillKeepable(deps.store, orderId, nowOf(deps)))) throw new PdfExpired();
+    const sha256 = deps.pdfs.write(orderId, pdf);
+    // 저장 직후에도 한 번 더 본다: 그 사이 정리됐으면 방금 쓴 파일을 지운다
+    if (!(await stillKeepable(deps.store, orderId, nowOf(deps)))) {
+      deps.pdfs.delete(orderId);
+      throw new PdfExpired();
+    }
+    // 그 사이 정리됐으면 저장 표시를 남기지 않는다
+    await dropMine((d) => (d.purgedAt ? d : { ...d, pdf: { stored: true, sha256, createdAt: nowOf(deps).toISOString(), lastError: null } }));
+    return pdf;
+  } catch (e) {
+    await dropMine((d) => ({ ...d, pdf: { ...d.pdf, lastError: e instanceof PdfExpired ? 'EXPIRED' : 'RENDER_FAILED' } }));
+    // 다른 생성이 먼저 저장했으면 그것을 쓴다
+    const saved = e instanceof PdfExpired ? null : deps.pdfs.read(orderId);
+    if (saved) return saved;
+    throw e;
+  }
+}
 
 /** 저장된 PDF를 돌려준다. 없으면 만들어 저장한다 */
 export async function ensureStoredPdf(deps: DeliveryDeps, orderId: string): Promise<Buffer> {
   const saved = deps.pdfs.read(orderId);
   if (saved) return saved;
-  const running = inflight.get(orderId);
+  const table = inflight();
+  const running = table.get(orderId);
   if (running) return running;
-  const job = (async () => {
-    const raw = newAccessToken();
-    const issued = nowOf(deps);
-    await deps.store.updateOrder(orderId, (o) =>
-      withDelivery(o, (d) => ({ ...d, renderToken: { hash: hashToken(raw), expiresAt: new Date(issued.getTime() + RENDER_TOKEN_TTL_MS).toISOString() } })),
-    );
-    try {
-      const pdf = await deps.renderPdf(deps.origin(), orderId, raw);
-      const sha256 = deps.pdfs.write(orderId, pdf);
-      await deps.store.updateOrder(orderId, (o) =>
-        withDelivery(o, (d) => ({ ...d, renderToken: null, pdf: { stored: true, sha256, createdAt: nowOf(deps).toISOString(), lastError: null } })),
-      );
-      return pdf;
-    } catch (e) {
-      await deps.store.updateOrder(orderId, (o) => withDelivery(o, (d) => ({ ...d, renderToken: null, pdf: { ...d.pdf, lastError: 'RENDER_FAILED' } })));
-      throw e;
-    }
-  })();
-  inflight.set(orderId, job);
+  const job = renderAndStore(deps, orderId);
+  table.set(orderId, job);
   try {
     return await job;
   } finally {
-    inflight.delete(orderId);
+    if (table.get(orderId) === job) table.delete(orderId);
   }
 }
 
-/** 새 다운로드 토큰. 이 주문의 이전 토큰은 무효로 한다. 원문은 돌려주기만 하고 저장하지 않는다 */
-export async function issueDownloadToken(store: Store, order: Order, now: Date): Promise<string> {
+/** 새 다운로드 토큰을 만든다. 이전 토큰은 여기서 무효로 하지 않는다(메일이 실제로 나간 뒤에 무효로 한다, D-034) */
+export async function issueDownloadToken(store: Store, order: Order, now: Date): Promise<{ raw: string; hash: string }> {
   const expiresAt = deliveryOf(order).expiresAt;
   if (!expiresAt) throw new Error('보관 기간이 정해지지 않은 주문입니다');
-  await store.revokeDownloadTokens(order.id, now.toISOString());
   const raw = newAccessToken();
-  await store.createDownloadToken({ tokenHash: hashToken(raw), orderId: order.id, createdAt: now.toISOString(), expiresAt, revokedAt: null });
-  return raw;
+  const hash = hashToken(raw);
+  await store.createDownloadToken({ tokenHash: hash, orderId: order.id, createdAt: now.toISOString(), expiresAt, revokedAt: null });
+  return { raw, hash };
 }
 
 async function log(store: Store, entry: DeliveryLog): Promise<void> {
   await store.appendDeliveryLog(entry);
+}
+
+/** 저장소 쓰기를 짧은 간격으로 몇 번 다시 시도한다(SQLite 잠금 등 잠깐의 실패) */
+async function retryStore<T>(work: () => Promise<T>, deps: DeliveryDeps, tries = 4): Promise<T> {
+  const sleep = deps.sleep ?? defaultSleep;
+  for (let i = 1; ; i++) {
+    try {
+      return await work();
+    } catch (e) {
+      if (i >= tries) throw e;
+      await sleep(250 * i);
+    }
+  }
 }
 
 /**
@@ -116,8 +164,8 @@ export async function sendDownloadEmail(deps: DeliveryDeps, orderId: string, rea
   });
   if (!claim.ok || !order?.email) return false;
 
-  const raw = await issueDownloadToken(deps.store, order, nowOf(deps));
-  const msg = downloadEmail({ orderId, link: `${deps.origin()}/api/download/${raw}`, expiresAt: deliveryOf(order).expiresAt! });
+  const token = await issueDownloadToken(deps.store, order, nowOf(deps));
+  const msg = downloadEmail({ orderId, link: `${deps.origin()}/api/download/${token.raw}`, expiresAt: deliveryOf(order).expiresAt! });
   const delays = deps.retryDelays ?? EMAIL_RETRY_DELAYS_MS;
   const sleep = deps.sleep ?? defaultSleep;
   let lastCode: string | null = null;
@@ -131,13 +179,18 @@ export async function sendDownloadEmail(deps: DeliveryDeps, orderId: string, rea
     const at = nowOf(deps).toISOString();
     await log(deps.store, { orderId, channel: 'email', reason, attempt, outcome: result.ok ? 'sent' : 'failed', code: result.ok ? null : result.code, at });
     if (result.ok) {
-      await deps.store.updateOrder(orderId, (o) => withDelivery(o, (d) => ({ ...d, email: { status: 'sent', attempts: d.email.attempts + attempt, sentAt: at, lastError: null } })));
-      await recordIssuanceEvent(deps.store, orderId, 'email_sent', new Date(at));
+      // 메일은 이미 나갔다. 이후 저장이 잠깐 실패해도 "보내는 중"으로 남아 다음 서버 시작 때 같은 메일이 또 나가지 않게,
+      // 이전 링크 무효화 실패는 넘기고(다음 재발송 때 다시 무효화된다) 상태 기록은 몇 번 다시 시도한다(D-035)
+      await deps.store.revokeDownloadTokens(orderId, at, token.hash).catch(() => 0);
+      await retryStore(() => deps.store.updateOrder(orderId, (o) => withDelivery(o, (d) => ({ ...d, email: { status: 'sent', attempts: d.email.attempts + attempt, sentAt: at, lastError: null } }))), deps);
+      await recordIssuanceEvent(deps.store, orderId, 'email_sent', new Date(at)).catch(() => false);
       return true;
     }
     lastCode = result.code;
     if (attempt < EMAIL_MAX_ATTEMPTS) await sleep(delays[attempt - 1] ?? delays.at(-1) ?? 0);
   }
+  // 보내지 못한 새 링크만 무효로 한다(이전 링크는 그대로 쓸 수 있다)
+  await deps.store.revokeDownloadToken(token.hash, nowOf(deps).toISOString());
   await deps.store.updateOrder(orderId, (o) =>
     withDelivery(o, (d) => ({ ...d, email: { ...d.email, status: 'failed', attempts: d.email.attempts + EMAIL_MAX_ATTEMPTS, lastError: lastCode } })),
   );
@@ -154,14 +207,22 @@ export async function deliverOnDone(deps: DeliveryDeps, orderId: string): Promis
   await Promise.allSettled(jobs);
 }
 
-/** 서버가 메일을 보내는 도중에 멈췄던 주문을 이어서 보낸다(서버 시작 때) */
+/**
+ * 서버가 멈춰 처음 메일이 나가지 못한 주문을 이어서 보낸다(서버 시작 때, D-034).
+ * - 보내는 도중(sending)에 멈춘 주문
+ * - 완성(done) 직후, 보내기 시작 전에 멈춘 주문(이메일로 받기, 상태 none, 보관 기간 안)
+ */
 export async function resumeEmailDeliveries(deps: DeliveryDeps): Promise<number> {
+  const now = nowOf(deps);
   const stuck = await deps.store.listOrdersWithEmailStatus('sending');
-  for (const o of stuck) {
-    await deps.store.updateOrder(o.id, (x) => withDelivery(x, (d) => ({ ...d, email: { ...d.email, status: 'none' } })));
-    void sendDownloadEmail(deps, o.id, 'initial');
+  const notStarted = (await deps.store.listOrdersWithEmailStatus('none')).filter((o) => o.deliveryMethods.includes('email') && !!o.email && isDeliverable(o, now));
+  for (const o of stuck) await deps.store.updateOrder(o.id, (x) => withDelivery(x, (d) => ({ ...d, email: { ...d.email, status: 'none' } })));
+  const targets = [...stuck, ...notStarted];
+  for (const o of targets) {
+    // 실패(저장소 오류 등)해도 서버가 죽지 않게 받아 둔다. 실패 코드는 주문·발송 기록에 남는다
+    void sendDownloadEmail(deps, o.id, 'initial').catch(() => undefined);
   }
-  return stuck.length;
+  return targets.length;
 }
 
 /** 이메일 링크로 PDF 받기. 토큰이 없거나·무효·만료이거나 주문이 보관 기간을 넘었으면 null */

@@ -44,7 +44,7 @@ export interface OrderStatusView {
 
 export function statusView(o: Order): OrderStatusView {
   const d = deliveryOf(o);
-  const stage = d.purgedAt
+  const stage = d.purgedAt || (d.expiresAt && Date.parse(d.expiresAt) <= Date.now())
     ? 'expired'
     : o.status === 'done' ? 'done' : o.status === 'failed' ? 'failed' : o.status === 'generating' ? 'writing' : o.status === 'refunded' ? 'refunded' : 'payment';
   return {

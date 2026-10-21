@@ -330,6 +330,20 @@ describe('운영자 관리 스크립트', () => {
     await expect(processRefund(store, provider, refundId, { outcome: 'refunded', note: null })).rejects.toBeInstanceOf(AdminError);
   });
 
+  it('환불된 주문의 이메일은 환불 처리 때 바로 지우고, 환불 기록은 이메일·상세 내용 없이 주문번호·사유·결과·일시를 남긴다', async () => {
+    const store = new MemoryStore();
+    const provider = new MockPaymentProvider();
+    const o = await paidOrder(store, { deliveryMethods: ['pdf', 'email'], email: 'buyer@example.com' }, provider);
+    const ack = await requestRefund(ctx(store, { token: o.accessToken }), o.orderId, body(o.orderId, { detail: '연락처 010-0000-0000' }));
+    const now = new Date('2026-10-22T05:00:00Z');
+    await processRefund(store, provider, ack.refundId, { outcome: 'refunded', note: '확인' }, now);
+    expect((await store.getOrder(o.orderId))!.email).toBeNull();
+    const rec = (await store.getRefund(ack.refundId))!;
+    expect(rec).toMatchObject({ id: ack.refundId, orderId: o.orderId, reason: 'not_generated', status: 'refunded', processedAt: now.toISOString(), email: null, detail: null });
+    expect(rec.result).toMatchObject({ outcome: 'refunded' });
+    expect(JSON.stringify(rec)).not.toContain('010-0000-0000');
+  });
+
   it('거절 처리: 결제를 취소하지 않고 기록하며 회신 이메일을 지운다', async () => {
     const store = new MemoryStore();
     const { o, provider, refundId } = await received(store);

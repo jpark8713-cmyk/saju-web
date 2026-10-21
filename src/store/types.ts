@@ -42,8 +42,11 @@ export interface DeliveryState {
     sentAt: string | null;
     lastError: string | null;
   };
-  /** 서버가 PDF를 만들 때만 쓰는 인쇄 페이지 토큰(해시). 몇 분 뒤 만료된다 */
-  renderToken: { hash: string; expiresAt: string } | null;
+  /**
+   * 서버가 PDF를 만들 때만 쓰는 인쇄 페이지 토큰(해시). 몇 분 뒤 만료된다.
+   * 만들 때마다 따로 하나씩 두고 끝나면 자기 것만 지운다(동시에 만들어도 서로 덮어쓰지 않게, D-034)
+   */
+  renderTokens: { hash: string; expiresAt: string }[];
   /** 보관 기간이 지나 PDF·리포트·이메일을 지운 시각 */
   purgedAt: string | null;
 }
@@ -175,14 +178,21 @@ export interface Store {
   getReport(orderId: string): Promise<Report | null>;
   /** 보관 기간이 지난 리포트를 지운다 */
   deleteReport(orderId: string): Promise<void>;
-  /** 보관 기간(delivery.expiresAt)이 지났고 아직 지우지 않은 주문 */
+  /**
+   * 정리할 주문: 보관 기간(delivery.expiresAt)이 지났는데 아직 지우지 않았거나(정리 표시 없음),
+   * 정리 표시와 관계없이 리포트·이메일·출생 정보가 남은 주문(D-035). PDF 파일은 정리 쪽에서 폴더를 따로 훑는다.
+   */
   listOrdersToPurge(now: Date): Promise<Order[]>;
   /** 전달을 마저 해야 하는 주문(이메일 발송이 도중에 멈춘 주문) */
   listOrdersWithEmailStatus(status: DeliveryState['email']['status']): Promise<Order[]>;
   createDownloadToken(token: DownloadToken): Promise<void>;
   findDownloadToken(tokenHash: string): Promise<DownloadToken | null>;
-  /** 주문의 유효한 토큰을 모두 무효로 한다. 바꾼 개수 */
-  revokeDownloadTokens(orderId: string, at: string): Promise<number>;
+  /** 주문의 유효한 토큰을 모두 무효로 한다(exceptHash는 남긴다). 바꾼 개수 */
+  revokeDownloadTokens(orderId: string, at: string, exceptHash?: string): Promise<number>;
+  /** 토큰 하나를 무효로 한다 */
+  revokeDownloadToken(tokenHash: string, at: string): Promise<void>;
+  /** 완성(done)되지 않았고 이메일이 남아 있으며 createdBefore 이전에 만든 주문 (이메일 정리용, D-034) */
+  listUnfinishedOrdersWithEmail(createdBefore: Date): Promise<Order[]>;
   appendDeliveryLog(log: DeliveryLog): Promise<void>;
   listDeliveryLogs(orderId: string): Promise<DeliveryLog[]>;
   findRefundByOrder(orderId: string): Promise<RefundRequest | null>;

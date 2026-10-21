@@ -5,6 +5,7 @@ node_modules/
 coverage/
 dist/
 .next/
+.next-*/
 samples-output/
 
 # 키 메모 파일 (저장소에 두지 않는다)

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DOWNLOAD_LINK_TTL_DAYS, DOWNLOAD_LINK_TTL_MS, EMAIL_MAX_ATTEMPTS } from '../../src/config/delivery';
 import { RESEND_PER_IP, RESEND_PER_ORDER } from '../../src/config/limits';
-import { deliverOnDone, ensureStoredPdf, pdfForDownloadToken, resumeEmailDeliveries, sendDownloadEmail, type DeliveryDeps } from '../../src/delivery/deliver';
+import { deliverOnDone, ensureStoredPdf, pdfForDownloadToken, renderAndStore, resumeEmailDeliveries, sendDownloadEmail, type DeliveryDeps } from '../../src/delivery/deliver';
 import { ConsoleEmailProvider } from '../../src/delivery/email';
 import { downloadEmail } from '../../src/delivery/messages';
 import { PdfStore } from '../../src/delivery/pdfStore';
@@ -45,7 +45,7 @@ function makeDeps(store: Store, over: Partial<DeliveryDeps> = {}) {
     renderPdf: async (_origin, orderId, token) => {
       // 인쇄 페이지는 내부 토큰으로만 열린다: 주문에 그 토큰의 해시가 걸려 있어야 한다
       const o = await store.getOrder(orderId);
-      if (deliveryOf(o!).renderToken?.hash !== hashToken(token)) throw new Error('render token mismatch');
+      if (!deliveryOf(o!).renderTokens.some((t) => t.hash === hashToken(token))) throw new Error('render token mismatch');
       renders.push(orderId);
       return FAKE_PDF;
     },
@@ -325,5 +325,255 @@ describe('로그에 개인정보가 없다', () => {
     const text = logs.join('\n') + JSON.stringify(await store.listDeliveryLogs(o.orderId));
     for (const needle of [addr, token, BIRTH.name, '1990', '14:30']) expect(text).not.toContain(needle);
     expect(logs.length).toBeGreaterThan(0);
+  });
+});
+
+describe('4차 수정 (D-034)', () => {
+  function gate() {
+    let open = () => {};
+    const p = new Promise<void>((r) => (open = r));
+    return { p, open: () => open() };
+  }
+
+  it('PDF를 동시에 두 번 만들어도 서로의 내부 토큰을 지우지 않는다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['email'], email: 'a@example.com' }); // PDF는 이미 저장됨
+    deps.pdfs.delete(o.orderId);
+    const gA = gate();
+    const gB = gate();
+    let calls = 0;
+    let tokenLost = 0;
+    const racing: DeliveryDeps = {
+      ...deps,
+      renderPdf: async (_origin, orderId, token) => {
+        const g = calls++ === 0 ? gA : gB;
+        await g.p;
+        // 렌더가 끝날 때까지 자기 토큰이 살아 있어야 한다(다른 생성이 지우면 인쇄 페이지가 404)
+        const ok = deliveryOf((await store.getOrder(orderId))!).renderTokens.some((t) => t.hash === hashToken(token));
+        if (!ok) {
+          tokenLost += 1;
+          throw new Error('render token removed by another render');
+        }
+        return FAKE_PDF;
+      },
+    };
+    const a = renderAndStore(racing, o.orderId);
+    const b = renderAndStore(racing, o.orderId);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    gB.open();
+    await expect(b).resolves.toEqual(FAKE_PDF);
+    gA.open();
+    await expect(a).resolves.toEqual(FAKE_PDF);
+    // 두 렌더 모두 자기 토큰으로 끝까지 열렸다(다른 생성이 저장한 PDF로 대신하지 않았다)
+    expect(tokenLost).toBe(0);
+    expect(deliveryOf((await store.getOrder(o.orderId))!).renderTokens).toEqual([]);
+  });
+
+  it('PDF를 만드는 사이 보관 기간 정리가 돌면 저장하지 않는다(정리 뒤에 PDF가 남지 않는다)', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['pdf'] });
+    deps.pdfs.delete(o.orderId);
+    const g = gate();
+    const slow: DeliveryDeps = { ...deps, renderPdf: async () => (await g.p, FAKE_PDF) };
+    const job = ensureStoredPdf(slow, o.orderId);
+    await vi.waitFor(async () => expect(deliveryOf((await store.getOrder(o.orderId))!).renderTokens).toHaveLength(1));
+    await purgeExpired(store, deps.pdfs, new Date(Date.now() + DOWNLOAD_LINK_TTL_MS + 60_000));
+    g.open();
+    await expect(job).rejects.toThrow();
+    expect(deps.pdfs.has(o.orderId)).toBe(false);
+  });
+
+  it('재발송 메일이 3번 모두 실패하면 이전 링크는 그대로 쓸 수 있고, 성공하면 그때 이전 링크가 무효가 된다', async () => {
+    const store = new MemoryStore();
+    const { deps, email } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['email'], email: 'buyer@example.com' });
+    const first = linkTokenOf(email.outbox[0]!.text);
+    email.failNext = 99;
+    expect(await sendDownloadEmail(deps, o.orderId, 'resend')).toBe(false);
+    expect(await pdfForDownloadToken(deps, first)).not.toBeNull();
+    email.failNext = 0;
+    expect(await sendDownloadEmail(deps, o.orderId, 'resend')).toBe(true);
+    const second = linkTokenOf(email.outbox[1]!.text);
+    expect(await pdfForDownloadToken(deps, first)).toBeNull();
+    expect(await pdfForDownloadToken(deps, second)).not.toBeNull();
+  });
+
+  it('완성되지 않은 주문의 이메일은 주문일부터 30일 뒤 지운다(그 전에는 남긴다)', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    mockEnv();
+    const unpaid = await createOrder(store, ORDER({ deliveryMethods: ['email'], email: 'unpaid@example.com' }));
+    const failed = await paidOrder(store, { deliveryMethods: ['email'], email: 'failed@example.com' });
+    await (await startGeneration(store, failed.orderId, failed.accessToken, runtime('fail'))).job;
+    const done = await doneOrder(store, deps, { deliveryMethods: ['email'], email: 'done@example.com' });
+    const created = Date.parse((await store.getOrder(unpaid.orderId))!.createdAt);
+    const day = 86_400_000;
+    expect((await purgeExpired(store, deps.pdfs, new Date(created + 29 * day))).unfinishedEmails).toBe(0);
+    const r = await purgeExpired(store, deps.pdfs, new Date(created + 30 * day + 60_000));
+    expect(r.unfinishedEmails).toBe(2);
+    expect((await store.getOrder(unpaid.orderId))!.email).toBeNull();
+    expect((await store.getOrder(failed.orderId))!.email).toBeNull();
+    // 완성된 주문은 완성일 기준(이번 정리에서 함께 지워졌는지는 완성일 + 30일로 정해진다)
+    const doneOrderNow = (await store.getOrder(done.orderId))!;
+    expect(doneOrderNow.status).toBe('done');
+  });
+
+  it('보관 기간이 지났으면 정리 전이라도 화면 리포트·PDF를 보여 주지 않는다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps);
+    await store.updateOrder(o.orderId, (x) => withDelivery(x, (d) => ({ ...d, expiresAt: new Date(Date.now() - 1000).toISOString() })));
+    await expect(reportViewFor(store, o.orderId, o.accessToken)).rejects.toBeInstanceOf(ReportExpired);
+    expect((await orderStatus(store, o.orderId, o.accessToken)).stage).toBe('expired');
+  });
+
+  it('완성 직후(메일을 보내기 전) 서버가 멈춘 주문도 서버를 켤 때 처음 메일을 보낸다', async () => {
+    const store = new MemoryStore();
+    const { deps, email } = makeDeps(store);
+    // 완성까지는 갔지만 전달 단계를 못 탄 주문(onDone 없음)
+    const o = await paidOrder(store, { deliveryMethods: ['email'], email: 'buyer@example.com' });
+    await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
+    expect(deliveryOf((await store.getOrder(o.orderId))!).email.status).toBe('none');
+    expect(await resumeEmailDeliveries(deps)).toBe(1);
+    await vi.waitFor(() => expect(email.outbox).toHaveLength(1));
+  });
+
+  it('서버 시작 때 이어 보내기가 저장소 오류로 실패해도 프로세스를 죽이지 않는다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await paidOrder(store, { deliveryMethods: ['email'], email: 'buyer@example.com' });
+    await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      const broken = { ...deps, store: Object.assign(Object.create(Object.getPrototypeOf(store)), store, { updateOrder: async () => { throw new Error('SQLITE_BUSY'); } }) as Store };
+      broken.store.listOrdersWithEmailStatus = store.listOrdersWithEmailStatus.bind(store);
+      await resumeEmailDeliveries(broken);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+});
+
+describe('정리 도중 실패 (D-035)', () => {
+  const expireNow = (store: Store, id: string) =>
+    store.updateOrder(id, (x) => withDelivery(x, (d) => ({ ...d, expiresAt: new Date(Date.now() - 60_000).toISOString() })));
+
+  it('삭제와 되돌리기(정리 표시)가 연달아 실패한 뒤 다음 정리가 리포트를 지운다. 그 사이 다른 주문과 미완성 주문 이메일 정리는 계속된다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const bad = await doneOrder(store, deps, { deliveryMethods: ['pdf'] });
+    const good = await doneOrder(store, deps, { deliveryMethods: ['pdf'] });
+    mockEnv();
+    const unpaid = await createOrder(store, ORDER({ deliveryMethods: ['email'], email: 'unpaid@example.com' }));
+    await expireNow(store, bad.orderId);
+    await expireNow(store, good.orderId);
+    const now = new Date(Date.now() + 31 * 86_400_000);
+
+    // 첫 정리: bad 주문에서 리포트 삭제와 정리 표시(주문 갱신)가 모두 실패한다
+    const realDeleteReport = store.deleteReport.bind(store);
+    const realUpdate = store.updateOrder.bind(store);
+    store.deleteReport = async (id) => {
+      if (id === bad.orderId) throw new Error('SQLITE_BUSY');
+      return realDeleteReport(id);
+    };
+    store.updateOrder = async (id, fn) => {
+      if (id === bad.orderId) throw new Error('SQLITE_BUSY');
+      return realUpdate(id, fn);
+    };
+    const first = await purgeExpired(store, deps.pdfs, now);
+    expect(first.failed).toBeGreaterThanOrEqual(1);
+    expect(await store.getReport(bad.orderId)).not.toBeNull();
+    expect(deliveryOf((await store.getOrder(bad.orderId))!).purgedAt).toBeNull();
+    // 다른 주문과 미완성 주문 이메일은 정리됐다
+    expect(await store.getReport(good.orderId)).toBeNull();
+    expect(deliveryOf((await store.getOrder(good.orderId))!).purgedAt).not.toBeNull();
+    expect((await store.getOrder(unpaid.orderId))!.email).toBeNull();
+
+    // 저장소가 회복된 뒤 다음 정리가 남은 리포트를 지우고 그때 표시한다
+    store.deleteReport = realDeleteReport;
+    store.updateOrder = realUpdate;
+    const second = await purgeExpired(store, deps.pdfs, now);
+    expect(second.failed).toBe(0);
+    expect(await store.getReport(bad.orderId)).toBeNull();
+    expect(deps.pdfs.has(bad.orderId)).toBe(false);
+    expect(deliveryOf((await store.getOrder(bad.orderId))!).purgedAt).not.toBeNull();
+  });
+
+  it.each([
+    ['메모리', () => new MemoryStore() as Store],
+    ['SQLite', () => new SqliteStore(join(tempDir(), 'saju.db')) as Store],
+  ])('정리 표시가 있어도 리포트·이메일·출생 정보가 남아 있으면 다시 정리 대상으로 잡는다(표시 뒤 멈춘 경우, %s)', async (_name, make) => {
+    const store = make();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['pdf', 'email'], email: 'buyer@example.com' });
+    await expireNow(store, o.orderId);
+    // 예전 방식으로 표시만 먼저 남고 지우지 못한 상태
+    await store.updateOrder(o.orderId, (x) => withDelivery(x, (d) => ({ ...d, purgedAt: new Date().toISOString() })));
+    const r = await purgeExpired(store, deps.pdfs, new Date());
+    expect(r.orders).toBe(1);
+    expect(await store.getReport(o.orderId)).toBeNull();
+    expect((await store.getOrder(o.orderId))!.email).toBeNull();
+    expect(deps.pdfs.has(o.orderId)).toBe(false);
+    // 다 지운 뒤에는 더 잡지 않는다
+    expect((await purgeExpired(store, deps.pdfs, new Date())).orders).toBe(0);
+    if (store instanceof SqliteStore) store.close();
+  });
+
+  it('PDF 폴더에 보관 기간이 지난 주문의 파일이 남아 있으면 지운다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['pdf'] });
+    await expireNow(store, o.orderId);
+    await purgeExpired(store, deps.pdfs, new Date());
+    // 정리 뒤에 어떤 이유로 파일이 다시 생긴 경우
+    deps.pdfs.write(o.orderId, FAKE_PDF);
+    const r = await purgeExpired(store, deps.pdfs, new Date());
+    expect(r.pdfs).toBe(1);
+    expect(deps.pdfs.has(o.orderId)).toBe(false);
+  });
+});
+
+describe('낮은 위험 (D-035)', () => {
+  it('서버 시작 때 이어 보내는 건수에 이메일이 지워진 주문은 넣지 않는다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await paidOrder(store, { deliveryMethods: ['email'], email: 'buyer@example.com' });
+    await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
+    await store.updateOrder(o.orderId, (x) => ({ ...x, email: null }));
+    expect(await resumeEmailDeliveries(deps)).toBe(0);
+  });
+
+  it('메일이 나간 직후 저장이 잠깐 실패해도 "보낸" 상태로 기록되어 서버를 다시 켜도 같은 메일이 또 나가지 않는다', async () => {
+    const store = new MemoryStore();
+    const { deps, email } = makeDeps(store);
+    const o = await paidOrder(store, { deliveryMethods: ['email'], email: 'buyer@example.com' });
+    await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
+    const realRevoke = store.revokeDownloadTokens.bind(store);
+    const realUpdate = store.updateOrder.bind(store);
+    let sentSeen = false;
+    let failedOnce = false;
+    store.revokeDownloadTokens = async () => {
+      throw new Error('SQLITE_BUSY');
+    };
+    store.updateOrder = async (id, fn) => {
+      // 메일이 나간 뒤 첫 "보냄" 기록만 한 번 실패시킨다
+      if (email.outbox.length > 0 && !failedOnce) {
+        failedOnce = true;
+        throw new Error('SQLITE_BUSY');
+      }
+      return realUpdate(id, fn);
+    };
+    expect(await sendDownloadEmail(deps, o.orderId, 'initial')).toBe(true);
+    store.revokeDownloadTokens = realRevoke;
+    store.updateOrder = realUpdate;
+    sentSeen = deliveryOf((await store.getOrder(o.orderId))!).email.status === 'sent';
+    expect(sentSeen).toBe(true);
+    expect(await resumeEmailDeliveries(deps)).toBe(0);
+    expect(email.outbox).toHaveLength(1);
   });
 });

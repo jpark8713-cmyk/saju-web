@@ -2,7 +2,7 @@
 // 파일은 소유자만 읽고 쓴다(600). 쓰기는 임시 파일에 쓴 뒤 이름을 바꿔, 도중에 실패해도 반쯤 쓴 PDF가 남지 않게 한다.
 // DB가 메모리(개발·테스트)면 임시 폴더를 쓴다.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Env } from '../config/flags';
@@ -40,6 +40,15 @@ export class PdfStore {
       throw e;
     }
     return createHash('sha256').update(pdf).digest('hex');
+  }
+
+  /** 저장된 PDF의 주문번호 목록(반쯤 쓴 임시 파일은 빼고) */
+  list(): string[] {
+    if (!existsSync(this.dir)) return [];
+    return readdirSync(this.dir)
+      .filter((n) => n.endsWith('.pdf'))
+      .map((n) => n.slice(0, -'.pdf'.length))
+      .filter((id) => ORDER_ID_RE.test(id));
   }
 
   delete(orderId: string): boolean {

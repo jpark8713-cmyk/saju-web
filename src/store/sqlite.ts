@@ -138,7 +138,9 @@ export class SqliteStore implements Store {
   async listOrdersToPurge(now: Date): Promise<Order[]> {
     const rows = this.db
       .prepare(
-        "SELECT data FROM orders WHERE json_extract(data, '$.delivery.expiresAt') IS NOT NULL AND json_extract(data, '$.delivery.purgedAt') IS NULL AND json_extract(data, '$.delivery.expiresAt') <= ?",
+        `SELECT data FROM orders o WHERE json_extract(data, '$.delivery.expiresAt') IS NOT NULL AND json_extract(data, '$.delivery.expiresAt') <= ?
+           AND (json_extract(data, '$.delivery.purgedAt') IS NULL OR json_extract(data, '$.email') IS NOT NULL
+                OR json_extract(data, '$.pendingBirth') IS NOT NULL OR EXISTS (SELECT 1 FROM reports r WHERE r.order_id = o.id))`,
       )
       .all(now.toISOString()) as Row[];
     return rows.map((r) => parse<Order>(r)!);
@@ -156,18 +158,32 @@ export class SqliteStore implements Store {
     return parse<DownloadToken>(this.db.prepare('SELECT data FROM download_tokens WHERE token_hash = ?').get(tokenHash) as Row | undefined);
   }
 
-  async revokeDownloadTokens(orderId: string, at: string): Promise<number> {
+  async revokeDownloadTokens(orderId: string, at: string, exceptHash?: string): Promise<number> {
     return this.tx(() => {
       const rows = this.db.prepare('SELECT token_hash, data FROM download_tokens WHERE order_id = ?').all(orderId) as Row[];
       let n = 0;
       for (const r of rows) {
         const t = parse<DownloadToken>(r)!;
-        if (t.revokedAt) continue;
+        if (t.revokedAt || String(r.token_hash) === exceptHash) continue;
         this.db.prepare('UPDATE download_tokens SET data = ? WHERE token_hash = ?').run(JSON.stringify({ ...t, revokedAt: at }), String(r.token_hash));
         n += 1;
       }
       return n;
     });
+  }
+
+  async revokeDownloadToken(tokenHash: string, at: string): Promise<void> {
+    this.tx(() => {
+      const t = parse<DownloadToken>(this.db.prepare('SELECT data FROM download_tokens WHERE token_hash = ?').get(tokenHash) as Row | undefined);
+      if (t && !t.revokedAt) this.db.prepare('UPDATE download_tokens SET data = ? WHERE token_hash = ?').run(JSON.stringify({ ...t, revokedAt: at }), tokenHash);
+    });
+  }
+
+  async listUnfinishedOrdersWithEmail(createdBefore: Date): Promise<Order[]> {
+    const rows = this.db
+      .prepare("SELECT data FROM orders WHERE status <> 'done' AND json_extract(data, '$.email') IS NOT NULL AND json_extract(data, '$.email') <> '' AND json_extract(data, '$.createdAt') <= ?")
+      .all(createdBefore.toISOString()) as Row[];
+    return rows.map((r) => parse<Order>(r)!);
   }
 
   async appendDeliveryLog(log: DeliveryLog): Promise<void> {

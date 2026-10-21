@@ -11,7 +11,7 @@ async function filesUnder(dir: string): Promise<string[]> {
 }
 
 test('운영 클라이언트 번들에 목 결제 코드가 없다', async () => {
-  const files = (await filesUnder(join(process.cwd(), '.next', 'static'))).filter((f) => f.endsWith('.js'));
+  const files = (await filesUnder(join(process.cwd(), process.env.NEXT_DIST_DIR || '.next', 'static'))).filter((f) => f.endsWith('.js'));
   expect(files.length).toBeGreaterThan(0);
   const hits: string[] = [];
   for (const f of files) {
