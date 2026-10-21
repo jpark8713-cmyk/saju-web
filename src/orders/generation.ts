@@ -104,20 +104,19 @@ async function run(store: Store, order: Order, runtime: LlmRuntime, onDone?: OnD
       chart, evidence, topicIds: order.topicIds, referenceYear: order.referenceYear,
       transport: runtime.transport, moderator: runtime.moderator,
     });
-    if (!isCurrentRun(await store.getOrder(order.id), myRun)) return;
     const generatedAt = new Date().toISOString();
     const content = { chart, evidence, body: result.body };
-    await store.saveReport({ orderId: order.id, name: birth.name, birthLabel: birth.label, ...content, createdAt: generatedAt });
-    const done = await store.updateOrder(order.id, (o) =>
+    // 리포트 저장과 완성 표시(보관 기간)는 한 번에 한다. 이 실행이 더는 현재 실행이 아니면 둘 다 하지 않는다(D-036)
+    const done = await store.saveReportWith({ orderId: order.id, name: birth.name, birthLabel: birth.label, ...content, createdAt: generatedAt }, (o) =>
       isCurrentRun(o, myRun)
         ? withDelivery(transition(o, 'done', { pendingBirth: null, generation: { ...o.generation, finishedAt: generatedAt, lastFailure: null } }), (d) => ({
             ...d,
             // 보관 기간은 완성 시각부터 센다(다운로드 링크 만료와 같다)
             expiresAt: expiryFrom(generatedAt),
           }))
-        : o,
+        : null,
     );
-    if (done?.status !== 'done' || done.generation.runs !== myRun) return;
+    if (!done) return;
     try {
       await store.createIssuance(buildIssuance(done, content, generatedAt));
     } catch (e) {

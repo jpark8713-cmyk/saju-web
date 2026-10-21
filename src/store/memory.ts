@@ -44,8 +44,14 @@ export class MemoryStore implements Store {
     return [...this.orders.values()].filter((o) => o.status === status).map((o) => structuredClone(o));
   }
 
-  async saveReport(report: Report): Promise<void> {
+  async saveReportWith(report: Report, update: (o: Order) => Order | null): Promise<Order | null> {
+    const current = this.orders.get(report.orderId);
+    if (!current) return null;
+    const next = update(structuredClone(current));
+    if (!next) return null;
+    this.orders.set(report.orderId, structuredClone(next));
     this.reports.set(report.orderId, structuredClone(report));
+    return structuredClone(next);
   }
 
   async getReport(orderId: string): Promise<Report | null> {

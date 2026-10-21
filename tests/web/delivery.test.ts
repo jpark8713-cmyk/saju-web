@@ -1,5 +1,5 @@
 // Phase 5 결과물 전달: PDF 저장, 이메일 링크(콘솔 발송), 토큰, 재시도·발송 기록, 재발송 제한, 보관 기간 정리, 로그 개인정보
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +18,7 @@ import { hashToken } from '../../src/orders/ids';
 import { reportViewFor, ReportExpired } from '../../src/orders/reportAccess';
 import { MemoryStore } from '../../src/store/memory';
 import { SqliteStore } from '../../src/store/sqlite';
-import type { Store } from '../../src/store/types';
+import type { Report, Store } from '../../src/store/types';
 import { RateLimited, RateLimiter } from '../../src/web/rateLimit';
 import { BIRTH, mockEnv, ORDER, paidOrder, runtime } from './helpers';
 
@@ -535,6 +535,58 @@ describe('정리 도중 실패 (D-035)', () => {
     const r = await purgeExpired(store, deps.pdfs, new Date());
     expect(r.pdfs).toBe(1);
     expect(deps.pdfs.has(o.orderId)).toBe(false);
+  });
+});
+
+describe('리포트 저장과 완성 표시는 한 번에, 쓰다 멈춘 PDF 임시 파일 정리 (D-036)', () => {
+  const fakeReport = (orderId: string) =>
+    ({ orderId, name: '홍길동', birthLabel: 'x', chart: {}, evidence: {}, body: {}, createdAt: new Date().toISOString() }) as unknown as Report;
+
+  it.each([
+    ['메모리', () => new MemoryStore() as Store],
+    ['SQLite', () => new SqliteStore(join(tempDir(), 'saju.db')) as Store],
+  ])('갱신 함수가 null을 돌려주면 리포트도 주문도 바꾸지 않는다 (%s)', async (_name, make) => {
+    const store = make();
+    const o = await paidOrder(store);
+    const before = await store.getOrder(o.orderId);
+    expect(await store.saveReportWith(fakeReport(o.orderId), () => null)).toBeNull();
+    expect(await store.getReport(o.orderId)).toBeNull();
+    expect(await store.getOrder(o.orderId)).toEqual(before);
+    if (store instanceof SqliteStore) store.close();
+  });
+
+  it('완성 표시 저장이 실패하면 리포트도 남지 않는다(보관 기간 없는 리포트가 생기지 않는다, SQLite)', async () => {
+    const store = new SqliteStore(join(tempDir(), 'saju.db'));
+    const o = await paidOrder(store);
+    // 주문을 done으로 바꾸는 쓰기만 실패시킨다(그 사이 서버가 멈춘 것과 같은 결과)
+    store.handle.exec(`CREATE TRIGGER fail_done BEFORE UPDATE ON orders WHEN NEW.status = 'done' BEGIN SELECT RAISE(ABORT, 'boom'); END`);
+    await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
+    expect(await store.getReport(o.orderId)).toBeNull();
+    const saved = (await store.getOrder(o.orderId))!;
+    expect(saved.status).toBe('failed');
+    expect(deliveryOf(saved).expiresAt).toBeNull();
+    store.close();
+  });
+
+  it('정리 때 한 시간 넘게 남은 PDF 임시 파일만 지우고, 쓰는 중일 수 있는 새 파일과 다른 파일은 둔다', async () => {
+    const store = new MemoryStore();
+    const { deps } = makeDeps(store);
+    const o = await doneOrder(store, deps, { deliveryMethods: ['pdf'] });
+    const dir = deps.pdfs.dir;
+    const old = join(dir, `${o.orderId}.pdf.0123456789ab.part`);
+    const fresh = join(dir, `${o.orderId}.pdf.ba9876543210.part`);
+    const other = join(dir, 'notes.pdf.0123456789ab.part');
+    for (const p of [old, fresh, other]) writeFileSync(p, 'x');
+    const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000);
+    utimesSync(old, twoHoursAgo, twoHoursAgo);
+    utimesSync(other, twoHoursAgo, twoHoursAgo);
+    const r = await purgeExpired(store, deps.pdfs, new Date());
+    expect(r.partFiles).toBe(1);
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(other)).toBe(true);
+    // 보관 기간 안의 완성 PDF는 그대로다
+    expect(deps.pdfs.has(o.orderId)).toBe(true);
   });
 });
 

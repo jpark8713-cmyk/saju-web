@@ -123,8 +123,16 @@ export class SqliteStore implements Store {
     return (this.db.prepare('SELECT data FROM orders WHERE status = ?').all(status) as Row[]).map((r) => parse<Order>(r)!);
   }
 
-  async saveReport(report: Report): Promise<void> {
-    this.db.prepare('INSERT INTO reports (order_id, data) VALUES (?, ?) ON CONFLICT(order_id) DO UPDATE SET data = excluded.data').run(report.orderId, JSON.stringify(report));
+  async saveReportWith(report: Report, update: (o: Order) => Order | null): Promise<Order | null> {
+    return this.tx(() => {
+      const current = parse<Order>(this.db.prepare('SELECT data FROM orders WHERE id = ?').get(report.orderId) as Row | undefined);
+      if (!current) return null;
+      const next = update(current);
+      if (!next) return null;
+      this.db.prepare('UPDATE orders SET status = ?, data = ? WHERE id = ?').run(next.status, JSON.stringify(next), report.orderId);
+      this.db.prepare('INSERT INTO reports (order_id, data) VALUES (?, ?) ON CONFLICT(order_id) DO UPDATE SET data = excluded.data').run(report.orderId, JSON.stringify(report));
+      return structuredClone(next);
+    });
   }
 
   async getReport(orderId: string): Promise<Report | null> {

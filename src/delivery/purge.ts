@@ -7,7 +7,7 @@
 // "정리됨" 표시는 모두 지운 뒤에만 남긴다. 도중에 실패하거나 서버가 멈춰도 다음 정리가 남은 것을 다시 잡는다.
 // 정리하는 사이 PDF가 다시 저장되는 것은 PDF 쪽의 "보관 기간이 지났는지" 확인(저장 전·후)이 막는다.
 // 한 주문이 실패해도 나머지 주문과 미완성 주문 이메일 정리는 계속한다.
-import { UNFINISHED_ORDER_EMAIL_RETENTION_DAYS } from '../config/delivery';
+import { STALE_PDF_PART_MS, UNFINISHED_ORDER_EMAIL_RETENTION_DAYS } from '../config/delivery';
 import type { Order, Store } from '../store/types';
 import type { PdfStore } from './pdfStore';
 import { deliveryOf, withDelivery } from './state';
@@ -15,6 +15,8 @@ import { deliveryOf, withDelivery } from './state';
 export interface PurgeResult {
   orders: number;
   pdfs: number;
+  /** 쓰다 멈춘 PDF 임시 파일을 지운 건수 */
+  partFiles: number;
   tokens: number;
   /** 완성되지 않은 주문에서 이메일 주소를 지운 건수 */
   unfinishedEmails: number;
@@ -44,7 +46,7 @@ async function purgeOne(store: Store, pdfs: PdfStore, o: Order, now: Date, resul
 }
 
 export async function purgeExpired(store: Store, pdfs: PdfStore, now = new Date()): Promise<PurgeResult> {
-  const result: PurgeResult = { orders: 0, pdfs: 0, tokens: 0, unfinishedEmails: 0, failed: 0 };
+  const result: PurgeResult = { orders: 0, pdfs: 0, partFiles: 0, tokens: 0, unfinishedEmails: 0, failed: 0 };
 
   for (const o of await store.listOrdersToPurge(now)) {
     try {
@@ -62,6 +64,13 @@ export async function purgeExpired(store: Store, pdfs: PdfStore, now = new Date(
     } catch {
       result.failed += 1;
     }
+  }
+
+  // 서버가 PDF를 쓰다 멈춰 남은 임시 파일도 지운다(쓰는 중인 파일은 건드리지 않게 한 시간 지난 것만, D-036)
+  try {
+    result.partFiles = pdfs.deleteStaleParts(new Date(now.getTime() - STALE_PDF_PART_MS));
+  } catch {
+    result.failed += 1;
   }
 
   const cutoff = new Date(now.getTime() - UNFINISHED_ORDER_EMAIL_RETENTION_DAYS * 86_400_000);

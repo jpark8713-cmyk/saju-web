@@ -174,7 +174,11 @@ export interface Store {
   updateOrder(id: string, update: (o: Order) => Order): Promise<Order | null>;
   /** 상태로 주문 찾기 (멈춘 생성 복구용) */
   listOrdersByStatus(status: Order['status']): Promise<Order[]>;
-  saveReport(report: Report): Promise<void>;
+  /**
+   * 리포트 저장과 주문 갱신(완성 표시·보관 기간)을 한 번에 한다. 갱신 함수가 null을 돌려주면 둘 다 하지 않는다.
+   * 도중에 서버가 멈춰도 보관 기간 없는 리포트만 남는 일이 없다(D-036). 저장했으면 갱신된 주문, 아니면 null
+   */
+  saveReportWith(report: Report, update: (o: Order) => Order | null): Promise<Order | null>;
   getReport(orderId: string): Promise<Report | null>;
   /** 보관 기간이 지난 리포트를 지운다 */
   deleteReport(orderId: string): Promise<void>;

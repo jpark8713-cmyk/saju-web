@@ -2,12 +2,15 @@
 // 파일은 소유자만 읽고 쓴다(600). 쓰기는 임시 파일에 쓴 뒤 이름을 바꿔, 도중에 실패해도 반쯤 쓴 PDF가 남지 않게 한다.
 // DB가 메모리(개발·테스트)면 임시 폴더를 쓴다.
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Env } from '../config/flags';
 import { ORDER_ID_RE } from '../orders/ids';
 import { sqlitePathOf } from '../store';
+
+/** write가 만드는 임시 파일 이름 */
+const PART_RE = /^(.+)\.pdf\.[0-9a-f]{12}\.part$/;
 
 export class PdfStore {
   constructor(readonly dir: string) {}
@@ -49,6 +52,25 @@ export class PdfStore {
       .filter((n) => n.endsWith('.pdf'))
       .map((n) => n.slice(0, -'.pdf'.length))
       .filter((id) => ORDER_ID_RE.test(id));
+  }
+
+  /** 쓰다 멈춘 임시 파일(<주문번호>.pdf.<hex>.part) 중 기준 시각보다 오래된 것을 지운다. 지운 개수를 돌려준다(D-036) */
+  deleteStaleParts(before: Date): number {
+    if (!existsSync(this.dir)) return 0;
+    let removed = 0;
+    for (const name of readdirSync(this.dir)) {
+      const m = PART_RE.exec(name);
+      if (!m || !ORDER_ID_RE.test(m[1]!)) continue;
+      const p = join(this.dir, name);
+      try {
+        if (statSync(p).mtimeMs >= before.getTime()) continue;
+        rmSync(p, { force: true });
+        removed += 1;
+      } catch {
+        // 그 사이 이름이 바뀌었거나 지워졌으면 넘어간다
+      }
+    }
+    return removed;
   }
 
   delete(orderId: string): boolean {

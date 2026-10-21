@@ -24,6 +24,9 @@ export const EMAIL_RETRY_DELAYS_MS: readonly number[] = Object.freeze([10_000, 6
 /** 서버가 PDF를 만들 때 인쇄 페이지를 여는 내부 토큰의 유효 시간 */
 export const RENDER_TOKEN_TTL_MS = 5 * 60_000;
 
+/** 쓰다 멈춘 PDF 임시 파일(.part)을 정리할 때까지 기다리는 시간. 쓰는 중인 파일을 건드리지 않도록 넉넉히 둔다(D-036) */
+export const STALE_PDF_PART_MS = 60 * 60_000;
+
 /** 한국 날짜로 "2026년 11월 20일" */
 export function koreanDate(iso: string): string {
   const k = new Date(Date.parse(iso) + 9 * 3_600_000);
