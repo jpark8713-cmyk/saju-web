@@ -1,6 +1,6 @@
 // SQLite 저장소 (사업자 결정 2026-10-21, D-030). Node 내장 node:sqlite를 쓴다(추가 의존성 없음).
 // 한 서버에서 웹 서버와 관리 스크립트가 같은 파일을 쓴다(WAL 모드). 모든 쿼리는 동기라 갱신 함수 안의 확인과 저장이 끼어들기 없이 한 번에 일어난다.
-// 발급 기록은 DB 트리거로도 고치기·지우기를 막고, 사건은 별도 표에 덧붙이기만 한다.
+// 발급 기록은 DB 트리거로도 고치기·지우기·덮어쓰기(INSERT OR REPLACE)를 막고, 사건은 별도 표에 덧붙이기만 한다(D-031).
 // 관리형 PostgreSQL로 옮길 때는 같은 Store 인터페이스로 구현을 하나 더 만든다(옮기는 기준: Docs/deploy.md).
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS issuance_events (
   at TEXT NOT NULL
 );
 CREATE TRIGGER IF NOT EXISTS issuances_no_update BEFORE UPDATE ON issuances BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS issuances_no_replace BEFORE INSERT ON issuances WHEN EXISTS (SELECT 1 FROM issuances WHERE order_id = NEW.order_id) BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS issuance_events_no_replace BEFORE INSERT ON issuance_events WHEN NEW.seq IS NOT NULL AND EXISTS (SELECT 1 FROM issuance_events WHERE seq = NEW.seq) BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS issuances_no_delete BEFORE DELETE ON issuances BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS issuance_events_no_update BEFORE UPDATE ON issuance_events BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS issuance_events_no_delete BEFORE DELETE ON issuance_events BEGIN SELECT RAISE(ABORT, 'issuance is immutable'); END;
@@ -57,7 +59,8 @@ export class SqliteStore implements Store {
   constructor(readonly path: string) {
     this.db = new DatabaseSync(path);
     // 쓰기 잠금을 기다리는 시간(관리 스크립트와 웹 서버가 동시에 쓸 때)
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;');
+    // recursive_triggers: REPLACE가 지우는 행에도 삭제 트리거가 돌게 한다(덮어쓰기 차단을 한 겹 더)
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL; PRAGMA recursive_triggers = ON;');
     this.db.exec(SCHEMA);
   }
 
@@ -156,7 +159,7 @@ export class SqliteStore implements Store {
         for (const e of events) this.db.prepare('INSERT INTO issuance_events (order_id, type, at) VALUES (?, ?, ?)').run(record.orderId, e.type, e.at);
       });
     } catch (e) {
-      if (e instanceof Error && /UNIQUE|PRIMARY KEY|constraint/i.test(e.message)) throw new IssuanceImmutable();
+      if (e instanceof Error && /UNIQUE|PRIMARY KEY|constraint|immutable/i.test(e.message)) throw new IssuanceImmutable();
       throw e;
     }
   }

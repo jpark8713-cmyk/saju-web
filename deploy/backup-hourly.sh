@@ -1,37 +1,64 @@
 #!/usr/bin/env bash
-# 매시간 SQLite 백업 → NCP Object Storage 업로드 (D-030). 서버(호스트)에서 systemd 타이머(saju-backup.timer)가 실행한다.
+# 매시간 SQLite 백업 → NCP Object Storage 업로드 (D-030, D-031). 서버(호스트)에서 systemd 타이머(saju-backup.timer)가 실행한다.
 # 필요: docker, aws CLI(S3 호환 클라이언트), /etc/saju/backup.env (권한 600)
 #   BACKUP_BUCKET=버킷 이름
-#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY = NCP API 인증키(Object Storage 권한만)
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY = NCP API 인증키(이 버킷 권한만, 버전 삭제 권한 없음)
 #   선택: BACKUP_PREFIX(기본 saju/sqlite), OBJECT_STORAGE_ENDPOINT(기본 https://kr.object.ncloudstorage.com),
-#         CONTAINER(기본 saju-web), DATA_DIR(기본 /srv/saju/data), KEEP_LOCAL(기본 24)
+#         CONTAINER(기본 saju-web), KEEP_LOCAL(기본 24), LOCAL_RETENTION_DAYS(기본 7)
+#
+# 데이터 폴더(/data)는 앱 사용자 소유라, 이 스크립트(root)는 그 안의 파일을 직접 만지지 않는다(심볼릭 링크로 서버 파일을 건드리게 하는 공격 방지).
+# 정리·백업·업로드할 파일 읽기는 모두 컨테이너 안에서 앱 사용자 권한으로 한다(docker exec).
 set -euo pipefail
+umask 077
 
 : "${BACKUP_BUCKET:?BACKUP_BUCKET이 필요합니다}"
 PREFIX="${BACKUP_PREFIX:-saju/sqlite}"
 ENDPOINT="${OBJECT_STORAGE_ENDPOINT:-https://kr.object.ncloudstorage.com}"
 CONTAINER="${CONTAINER:-saju-web}"
-DATA_DIR="${DATA_DIR:-/srv/saju/data}"
 KEEP_LOCAL="${KEEP_LOCAL:-24}"
+LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-7}"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="saju-${STAMP}.db"
+IN_CONTAINER="/data/backups/${NAME}"
 
-# 1) 컨테이너 안에서 온라인 백업(서버를 멈추지 않는다). 사본은 같은 볼륨의 backups/ 아래에 만든다
-docker exec "$CONTAINER" mkdir -p /data/backups
-docker exec "$CONTAINER" npm run -s db:backup -- "/data/backups/${NAME}"
+s3() { aws --endpoint-url "$ENDPOINT" "$@"; }
+app() { docker exec "$CONTAINER" "$@"; }
 
-# 2) Object Storage에 올린다. 올린 뒤 크기가 같은지 확인한다
-LOCAL="${DATA_DIR}/backups/${NAME}"
-aws --endpoint-url "$ENDPOINT" s3 cp "$LOCAL" "s3://${BACKUP_BUCKET}/${PREFIX}/${NAME}" --only-show-errors
-REMOTE_SIZE="$(aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BACKUP_BUCKET" --key "${PREFIX}/${NAME}" --query ContentLength --output text)"
-LOCAL_SIZE="$(stat -c %s "$LOCAL")"
+# 0) 버킷 보호 확인(필수 조건, Docs/deploy.md 5장). 하나라도 빠졌으면 올리지 않는다
+VERSIONING="$(s3 s3api get-bucket-versioning --bucket "$BACKUP_BUCKET" --query Status --output text 2>/dev/null || true)"
+if [ "$VERSIONING" != "Enabled" ]; then
+  echo "버킷 버전 관리(삭제 방지)가 켜져 있지 않아 백업을 올리지 않아요: ${BACKUP_BUCKET} (상태: ${VERSIONING:-확인 불가})" >&2
+  exit 1
+fi
+if ! s3 s3api get-bucket-encryption --bucket "$BACKUP_BUCKET" >/dev/null 2>&1; then
+  echo "버킷 저장 암호화(SSE)가 설정돼 있지 않아 백업을 올리지 않아요: ${BACKUP_BUCKET}" >&2
+  exit 1
+fi
+PUBLIC_GRANTS="$(s3 s3api get-bucket-acl --bucket "$BACKUP_BUCKET" --query "Grants[?Grantee.URI!=null].Grantee.URI" --output text 2>/dev/null || echo "확인 불가")"
+case "$PUBLIC_GRANTS" in
+  *AllUsers*|*AuthenticatedUsers*|*"확인 불가"*)
+    echo "버킷이 비공개인지 확인하지 못했거나 공개 권한이 있어 백업을 올리지 않아요: ${BACKUP_BUCKET}" >&2
+    exit 1 ;;
+esac
+
+# 1) 폴더 권한(소유자만, 700)과 정리. 정리는 백업 전에 해서 업로드가 계속 실패해도 서버 사본이 쌓이지 않게 한다.
+#    정리는 이름의 시각 기준이다: 백업 사본은 최근 KEEP_LOCAL개, 복원 때 남긴 원래 DB는 LOCAL_RETENTION_DAYS일.
+app mkdir -p /data/backups
+app chmod 700 /data /data/backups
+#    이번 백업이 하나 더해지므로 KEEP_LOCAL-1개만 남겨 둔다(백업 뒤 KEEP_LOCAL개)
+app npm run -s db:prune -- --keep "$(( KEEP_LOCAL > 1 ? KEEP_LOCAL - 1 : 1 ))" --retention-days "$LOCAL_RETENTION_DAYS"
+
+# 2) 온라인 백업(서버를 멈추지 않는다). 사본은 파일 하나이고 권한 600이다
+app npm run -s db:backup -- "$IN_CONTAINER"
+LOCAL_SIZE="$(app stat -c %s "$IN_CONTAINER")"
+
+# 3) 컨테이너 안에서 읽어 그대로 올리고, 올린 크기가 같은지 확인한다
+app cat "$IN_CONTAINER" | s3 s3 cp - "s3://${BACKUP_BUCKET}/${PREFIX}/${NAME}" --expected-size "$LOCAL_SIZE" --only-show-errors
+REMOTE_SIZE="$(s3 s3api head-object --bucket "$BACKUP_BUCKET" --key "${PREFIX}/${NAME}" --query ContentLength --output text)"
 if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
   echo "업로드 크기가 다릅니다: local=${LOCAL_SIZE} remote=${REMOTE_SIZE}" >&2
   exit 1
 fi
-
-# 3) 서버에는 최근 KEEP_LOCAL개만 남긴다(Object Storage 보관 기간은 버킷 수명 주기 규칙으로 정한다)
-ls -1t "${DATA_DIR}/backups"/saju-*.db 2>/dev/null | tail -n +"$((KEEP_LOCAL + 1))" | xargs -r rm -f
 
 echo "백업 완료: ${PREFIX}/${NAME} (${LOCAL_SIZE} bytes)"

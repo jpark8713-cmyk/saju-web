@@ -12,6 +12,7 @@
     "admin": "tsx --env-file-if-exists=.env scripts/admin.ts",
     "db:backup": "tsx --env-file-if-exists=.env scripts/db-backup.ts",
     "db:restore": "tsx --env-file-if-exists=.env scripts/db-restore.ts",
+    "db:prune": "tsx --env-file-if-exists=.env scripts/db-prune.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

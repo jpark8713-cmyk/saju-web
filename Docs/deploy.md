@@ -10,7 +10,7 @@
 | --- | --- |
 | 서버 | NCP Server(Ubuntu 22.04 이상) 1대. Docker, nginx, aws CLI 설치 |
 | 앱 | `Dockerfile`로 만든 이미지 1개(Node 26.7.0, 포트 3000) |
-| DB | SQLite 파일 `/data/saju.db`. `/data`는 Docker 볼륨(서버의 `/srv/saju/data`)이어야 한다(D-030) |
+| DB | SQLite 파일 `/data/saju.db`. `/data`에 서버 경로(`/srv/saju/data`)나 이름 지정 볼륨이 연결돼 있어야 한다(D-030, D-031) |
 | 백업 | 매시간 온라인 백업 → NCP Object Storage(`deploy/backup-hourly.sh`, systemd 타이머) |
 | 앞단 | nginx: HTTPS 종료, IP별 속도 제한, 본문 64KB 상한, `X-Real-IP` 덮어쓰기(`deploy/nginx.conf`) |
 | PDF | 이미지 안의 헤드리스 Chromium(Playwright 1.63.0)과 Noto 글꼴(D-025) |
@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | `NODE_ENV` | `production` (이미지에 고정) | 개발 전용 기능(목 결제, 가짜 LLM)은 development·test에서만 켜진다 |
 | `DATABASE_URL` | `file:/data/saju.db` (이미지 기본값) | 없으면 서버가 시작하지 않는다 |
-| `DB_REQUIRE_VOLUME` | `true` (이미지에 고정) | DB 폴더가 컨테이너 볼륨이 아니면 서버가 시작하지 않는다 |
+| `DB_REQUIRE_VOLUME` | `true` (이미지에 고정) | `/data`에 서버 경로나 이름 지정 볼륨이 연결되지 않았거나, 이름 없는 볼륨·메모리(tmpfs)면 서버가 시작하지 않는다 |
 | `APP_ORIGIN` | **필수** | 서비스 주소(예: `https://example.com`). PDF 생성기와 결제창 복귀 주소가 이 값만 쓴다. 없으면 서버가 시작하지 않는다 |
 | `REFUND_ID_SECRET` | **필수** | 환불 접수번호 HMAC 키, 32자 이상 임의 문자열. 바꾸면 같은 입력의 접수번호가 달라진다. 없으면 서버가 시작하지 않는다 |
 | `TRUST_PROXY` | **필수** (`true`) | nginx가 `X-Real-IP`를 덮어쓰는 구성에서 켠다. 안 켜면 앱은 모든 요청을 한 IP로 세고, 시작할 때 경고를 남긴다 |
@@ -40,7 +40,9 @@
 ## 3. 처음 설치
 
 1. 서버 준비: Docker, nginx, certbot, aws CLI 설치. 방화벽은 80·443만 연다(3000은 서버 안에서만).
-2. 데이터 폴더: `sudo mkdir -p /srv/saju/data && sudo chown 1000:1000 /srv/saju/data` (이미지의 실행 사용자 `node`가 uid 1000이다).
+2. 데이터 폴더: `sudo mkdir -p /srv/saju/data && sudo chown 1000:1000 /srv/saju/data && sudo chmod 700 /srv/saju/data`
+   - 이미지의 실행 사용자 `node`가 uid 1000이다.
+   - **권한 700은 필수다.** DB와 백업에 개인정보가 들어 있어 서버의 다른 사용자가 읽으면 안 된다. 폴더 권한이 700이 아니면(그룹·다른 사용자 권한이 있으면) 서버가 시작하지 않는다. 백업 스크립트도 매번 700으로 다시 맞춘다.
 3. 이미지 빌드: `docker build -t saju-web:<버전> . && docker tag saju-web:<버전> saju-web:current`
 4. 환경 파일 작성: 2장의 운영 필수 값.
 5. 실행:
@@ -50,7 +52,9 @@
      -v /srv/saju/data:/data \
      -p 127.0.0.1:3000:3000 saju-web:current
    ```
-   `-v /srv/saju/data:/data`를 빼면 서버가 시작하지 않는다(볼륨 검사). 컨테이너를 지우고 다시 만들어도 DB는 `/srv/saju/data/saju.db`에 남는다.
+   - `-v /srv/saju/data:/data`를 빼거나, 이름 없는 볼륨(`-v /data`)이나 `--tmpfs /data`로 띄우면 서버가 시작하지 않는다. 시작 점검이 컨테이너의 마운트 목록으로 확인한다.
+   - 이 문서는 서버 경로(`/srv/saju/data`)를 쓴다. 백업 스크립트가 이 경로를 읽기 때문이다. 이름 지정 볼륨(`-v saju-data:/data`)도 시작은 되지만, 그때는 `DATA_DIR`을 그 볼륨의 서버 쪽 경로로 바꿔야 한다.
+   - 컨테이너를 지우고 다시 만들어도 DB는 `/srv/saju/data/saju.db`에 남는다.
 6. nginx: `deploy/nginx.conf`를 `/etc/nginx/conf.d/saju.conf`로 두고 도메인·인증서를 바꾼다. 프록시 공통 설정(파일 끝 주석)은 `/etc/nginx/saju-proxy.conf`로 만든다.
    - IP별 속도 제한: API 전체 초당 10번(순간 20번), 환불 접수 분당 6번(순간 5번). IPv6는 앞 64비트로 묶어 센다.
    - 본문 상한 64KB(`client_max_body_size 64k`).
@@ -65,12 +69,27 @@
 
 ## 5. 백업과 복원 (D-030 필수 조건)
 
+### 백업 보호 (필수, D-031)
+
+백업에는 개인정보가 그대로 들어 있다. 주문·환불 이메일, 생성 전 출생 정보, 리포트(표지의 이름·생년월일 표기 포함)다. 아래 네 가지를 모두 켜야 한다. 백업 스크립트는 올리기 전에 버킷의 버전 관리(`Enabled`), 저장 암호화 설정, 공개 권한 없음(ACL에 AllUsers·AuthenticatedUsers 없음)을 확인하고, 하나라도 아니면 올리지 않고 실패로 끝난다. NCP가 이 확인 API 중 하나를 지원하지 않으면 백업이 계속 실패하므로, 설치 직후 수동 실행으로 확인한다.
+
+| 항목 | 설정 |
+| --- | --- |
+| 비공개 버킷 | 버킷과 객체의 공개 접근을 끈다. 접근은 백업용 API 인증키로만 한다 |
+| 저장 암호화 | 버킷의 서버 측 암호화(SSE)를 켠다 |
+| 삭제 방지 | 버킷의 버전 관리를 켜고, 지원되면 객체 잠금도 켠다. 백업용 인증키에는 버전 삭제 권한(`DeleteObjectVersion`)을 주지 않는다(버전 관리만으로는 탈취된 키로 이전 버전까지 지울 수 있다). 7일 보관 정리는 수명 주기 규칙이 한다 |
+| 서버 데이터 폴더 권한 700 | `/srv/saju/data`와 `backups/`는 700, 백업 사본은 600(백업 스크립트가 매번 맞춘다) |
+
+- 보관 기간: **7일**. 수명 주기 규칙으로 7일이 지난 객체(이전 버전 포함)를 지운다. 백업이 모두 개인정보가 든 전체 사본이라, 오래 보관하는 사본(예: 매일 0시 백업 90일)은 두지 않는다.
+- TODO(owner): 백업 보관 기간(7일)을 개인정보 처리방침에 적는다.
+- 백업용 인증키에는 이 버킷의 읽기·쓰기 권한만 준다(다른 서비스·버킷 권한 없음).
+
 ### 매시간 백업 → NCP Object Storage
 
 - `deploy/backup-hourly.sh`가 컨테이너 안에서 `npm run db:backup`(SQLite 온라인 백업)으로 일관된 사본을 만든다. 서버를 멈추지 않는다.
 - 사본을 열어 무결성 검사와 표 확인을 마친 뒤 Object Storage에 올린다. 올린 크기도 확인한다.
 - 설치:
-  1. NCP 콘솔에서 Object Storage 버킷을 만든다. 버킷 수명 주기 규칙으로 보관 기간을 정한다(TODO(owner): 보관 기간. 제안: 시간별 백업 7일, 그중 매일 0시 백업 90일).
+  1. NCP 콘솔에서 Object Storage 버킷을 만들고 위 "백업 보호" 네 가지를 켠다. 수명 주기 규칙으로 7일 보관을 건다.
   2. Object Storage 권한만 가진 API 인증키를 만든다.
   3. `/etc/saju/backup.env`(권한 600):
      ```
@@ -82,15 +101,24 @@
   4. 저장소를 `/opt/saju`에 두고 `deploy/saju-backup.service`·`deploy/saju-backup.timer`를 `/etc/systemd/system/`에 복사한다.
   5. `sudo systemctl daemon-reload && sudo systemctl enable --now saju-backup.timer`
   6. 확인: `sudo systemctl start saju-backup.service && journalctl -u saju-backup.service -n 20` → "백업 완료"가 나오고 버킷에 파일이 생기는지 본다.
-- 서버에는 최근 24개만 남긴다(`/srv/saju/data/backups`).
+- 서버에는 최근 24개만 남긴다(`/srv/saju/data/backups`). 정리는 업로드 전에 하므로 업로드가 계속 실패해도 쌓이지 않는다. 실패하면 `journalctl -u saju-backup.service`에 남는다.
+- 데이터 폴더(`/srv/saju/data`)는 앱 사용자 소유라, 백업·복원 스크립트(root)는 그 안의 파일을 직접 만들거나 권한·소유자를 바꾸지 않는다. 정리(`npm run db:prune`)·백업·업로드할 파일 읽기는 컨테이너 안에서 앱 사용자 권한으로 한다. 앱이 뚫려 심볼릭 링크를 심어도 서버(호스트) 파일을 건드리지 못하게 하려는 것이다.
+- 정리 기준은 파일 이름의 시각이다(백업 사본은 최근 24개, 복원 때 남긴 원래 DB는 7일). 옮긴 파일은 수정 시각이 옛날 그대로일 수 있어 수정 시각은 쓰지 않는다.
+- 배포 파일(`deploy/*`)은 git으로 내려받아 쓴다(`.gitattributes`가 줄 끝을 LF로 고정). 윈도에서 작업한 파일을 그대로 복사하면 줄 끝이 CRLF라 bash가 읽지 못할 수 있다.
 - 매시간 백업이므로 사고가 나면 최대 1시간 분량의 주문·환불 기록을 잃을 수 있다. 잃은 결제는 PG 관리 화면의 결제 내역으로 확인해 대조한다.
 
 ### 복원
 
 1. 복원할 백업을 고른다: `aws --endpoint-url https://kr.object.ncloudstorage.com s3 ls s3://<버킷>/saju/sqlite/`
-2. `sudo -E bash -c 'set -a; . /etc/saju/backup.env; set +a; /opt/saju/deploy/restore.sh saju/sqlite/<파일 이름>'`
+2. root로 `bash -c 'set -a; . /etc/saju/backup.env; set +a; /opt/saju/deploy/restore.sh saju/sqlite/<파일 이름>'`
+   - 서버에 있는 사본으로 복원하려면 `restore.sh --local /srv/saju/data/backups/<파일 이름>`. 파일을 복사해서 쓰고 원본은 지우지 않는다.
+   - 파일 이름은 `saju-<시각>.db` 형식만 받는다.
+   - 받은 사본은 root만 쓰는 준비 폴더(`/var/lib/saju/restore`, 권한 711)에 두고, 컨테이너에는 그 파일 하나만 읽기 전용으로 연결한다. 끝나면 지운다.
    - 먼저 백업 파일만 확인한다(무결성, 표 5개). 실패하면 서버를 멈추지 않고 끝난다.
-   - 웹 서버를 멈추고 바꿔 넣은 뒤 다시 켠다. 원래 DB는 `/srv/saju/data/saju.db.before-restore-<시각>`으로 남는다.
+   - 웹 서버를 멈추고 바꿔 넣는다. 백업을 임시 파일에 복사해 다시 검증한 뒤에만 교체하고, 도중에 실패하면 원래 DB를 그대로(또는 제자리로 되돌려) 둔다. 성공하든 실패하든 끝나면 서버를 다시 켠다.
+   - 원래 DB는 `/srv/saju/data/saju.db.before-restore-<시각>`(와 짝 맞는 `-wal`·`-shm`)으로 남는다. 복원을 되돌리려면 서버를 멈추고 이 파일들을 `saju.db`(와 `-wal`·`-shm`)로 다시 바꾼 뒤 켠다. 7일이 지나면 백업 스크립트가 지운다(전체 백업과 같은 보관 기간).
+   - 끝날 때 DB 파일이 없으면(바꿔 넣기와 되돌리기가 모두 실패한 경우) 서버를 켜지 않고 실패로 끝난다. 그대로 켜면 빈 DB가 새로 만들어지기 때문이다. 안내에 따라 `.before-restore-*` 파일을 되돌린 뒤 `docker start saju-web` 한다.
+   - 복원에 쓴 백업 사본(`/srv/saju/data/restore/`)은 성공하면 지운다.
 3. 복원 뒤 확인:
    - `docker logs saju-web`에 `[시작 점검]` 오류가 없는지(멈춘 생성 주문 복구 건수는 나올 수 있다).
    - `docker exec saju-web npm run -s admin -- refunds list`가 동작하는지.

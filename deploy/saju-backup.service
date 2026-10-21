@@ -7,4 +7,5 @@ Requires=docker.service
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/saju/backup.env
-ExecStart=/opt/saju/deploy/backup-hourly.sh
+# 실행 권한(x)이 빠져도 돌도록 bash로 직접 부른다
+ExecStart=/usr/bin/env bash /opt/saju/deploy/backup-hourly.sh
