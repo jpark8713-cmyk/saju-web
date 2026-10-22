@@ -17,7 +17,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (typeof paymentKey !== 'string' || typeof outcome !== 'string' || !OUTCOMES.includes(outcome as MockOutcome) || !Number.isInteger(amount) || amount < 0) {
     return json({ error: 'bad_request' }, 400);
   }
-  const to = sharedMockProvider().authorize(paymentKey, outcome as MockOutcome, amount);
-  if (!to) return json({ error: 'not_found' }, 404);
+  // 이미 처리했거나 없는 결제창이면(뒤로 가기로 돌아와 다시 제출) 결제창 주소로 돌려보내 안내 화면을 보여 준다
+  const to = sharedMockProvider().authorize(paymentKey, outcome as MockOutcome, amount) ?? `/dev/mock-pg?paymentKey=${encodeURIComponent(paymentKey)}`;
   return Response.redirect(new URL(to, req.nextUrl.origin), 303);
 }
