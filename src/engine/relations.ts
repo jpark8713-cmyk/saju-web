@@ -1,6 +1,7 @@
 // 원국 안의 합·충. 학파 차이가 적은 천간합·천간충·지지 육합·지지 충·지지 삼합(세 글자 모두 있을 때)만 다룬다.
-// 형·파·해, 반합, 대운·세운과의 관계는 아직 다루지 않는다(Docs/decisions.md D-009).
-import type { ChartRef, Element, PillarPosition, PillarSet, Relation } from './types';
+// 형·파·해, 반합은 아직 다루지 않는다(Docs/decisions.md D-009). 대운과의 관계도 아직 다루지 않는다.
+// 세운(그해 간지)과 원국 글자의 관계는 luckRelations로 따로 구한다(D-048: 같은 글자·천간합·천간충·지지 육합·지지 충만).
+import type { ChartRef, Element, Pillar, PillarPosition, PillarSet, Relation } from './types';
 
 /** 천간합: 갑기토, 을경금, 병신수, 정임목, 무계화 */
 const STEM_COMBINE: readonly [number, number, Element][] = [
@@ -73,4 +74,31 @@ function tripleRelations(p: PillarSet): Relation[] {
 
 export function computeRelations(p: PillarSet): Relation[] {
   return [...pairRelations(p), ...tripleRelations(p)];
+}
+
+/** 그해(세운) 글자와 원국 글자 하나의 관계 */
+export interface LuckRelation {
+  kind: 'same' | 'stemCombine' | 'stemClash' | 'branchSixCombine' | 'branchClash';
+  /** 그해 간지의 윗글자(stem)·아랫글자(branch) 중 어느 쪽인지 */
+  luckPart: 'stem' | 'branch';
+  /** 관계를 맺는 원국 글자 자리 */
+  ref: ChartRef;
+  resultElement?: Element;
+}
+
+/** 그해 간지의 윗글자는 원국 윗글자와, 아랫글자는 원국 아랫글자와 견준다(같은 글자·합·충) */
+export function luckRelations(p: PillarSet, luck: Pillar): LuckRelation[] {
+  const stems = slots(p, 'stem').flatMap((s): LuckRelation[] => {
+    if (s.value === luck.stem) return [{ kind: 'same', luckPart: 'stem', ref: s.ref }];
+    const combine = STEM_COMBINE.find(([x, y]) => matchPair(s.value, luck.stem, x, y));
+    if (combine) return [{ kind: 'stemCombine', luckPart: 'stem', ref: s.ref, resultElement: combine[2] }];
+    return STEM_CLASH.some(([x, y]) => matchPair(s.value, luck.stem, x, y)) ? [{ kind: 'stemClash', luckPart: 'stem', ref: s.ref }] : [];
+  });
+  const branches = slots(p, 'branch').flatMap((s): LuckRelation[] => {
+    if (s.value === luck.branch) return [{ kind: 'same', luckPart: 'branch', ref: s.ref }];
+    const combine = BRANCH_SIX_COMBINE.find(([x, y]) => matchPair(s.value, luck.branch, x, y));
+    if (combine) return [{ kind: 'branchSixCombine', luckPart: 'branch', ref: s.ref, resultElement: combine[2] }];
+    return Math.abs(s.value - luck.branch) === 6 ? [{ kind: 'branchClash', luckPart: 'branch', ref: s.ref }] : [];
+  });
+  return [...stems, ...branches];
 }

@@ -5,7 +5,9 @@ import {
   pillarKo, pillarLabel, stemLabel, stemYinYang,
 } from './constants';
 import { daewoonStartLabel } from './daewoon';
-import type { ChartRef, Element, Evidence, PillarPosition, Relation, SajuChart } from './types';
+import { luckRelations, type LuckRelation } from './relations';
+import { tenGodOfBranch, tenGodOfStem } from './tenGods';
+import type { ChartRef, Element, Evidence, Pillar, PillarPosition, Relation, SajuChart, TenGod } from './types';
 
 const POSITIONS: PillarPosition[] = ['year', 'month', 'day', 'hour'];
 const YIN_YANG_KO = { yang: '양(陽)', yin: '음(陰)' } as const;
@@ -107,7 +109,9 @@ function tenGodGroupEvidence(chart: SajuChart): Evidence[] {
     return {
       id: `tenGodGroup.${g.id}`,
       kind: 'tenGodGroup',
-      content: `${label}은(는) 일간을 뺀 원국 글자 중 ${hits.length}개${where}`,
+      // 원국 글자 수와 센 글자 수(일간을 뺀 수)를 함께 적는다. 없으면 모델이 "6글자 중"처럼 기준 수를 지어냈다(D-043).
+      // 일간에는 쉬운 말을 붙여 둔다. "일간을 뺀"만 적으면 모델이 그 말을 문장에 옮겨 전문 용어 검사에 걸렸다
+      content: `${label}은(는) 원국 ${chart.elements.total}글자 중 일간(나를 나타내는 글자)을 뺀 ${chart.elements.total - 1}글자에서 ${hits.length}개${where}`,
       sourceFields: ['tenGods', 'pillars.day.stem'],
       // 0개면 그 오행 칸을, 있으면 해당 글자를 가리킨다
       chartRefs: hits.length ? hits.map((t) => `${t.position}.${t.part}` as ChartRef) : [`elements.${el}`],
@@ -157,6 +161,11 @@ function relationEvidence(chart: SajuChart): Evidence[] {
   });
 }
 
+/** 대운·세운 간지의 천간·지지 오행. 없으면 모델이 그해의 기운을 짐작해 썼다(D-043) */
+function luckElements(p: Pillar): string {
+  return `천간 ${stemLabel(p.stem)} 오행 ${elementLabel(STEM_ELEMENTS[p.stem]!)}, 지지 ${branchLabel(p.branch)} 오행 ${elementLabel(BRANCH_ELEMENTS[p.branch]!)}`;
+}
+
 function daewoonEvidence(chart: SajuChart): Evidence[] {
   const s = chart.daewoonStart;
   const direction: Evidence = {
@@ -173,7 +182,7 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
   const entries = chart.daewoon.map((d): Evidence => ({
     id: `daewoon[${d.index}]`,
     kind: 'daewoon',
-    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${daewoonStartLabel(d)}부터 10년(나이는 세는 나이)`,
+    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${daewoonStartLabel(d)}부터 10년(나이는 세는 나이), ${luckElements(d.pillar)}`,
     sourceFields: [`daewoon[${d.index}]`],
     chartRefs: [`daewoon[${d.index}]`],
     terms: [pillarKo(d.pillar), pillarHanja(d.pillar), STEMS_KO[d.pillar.stem]!, BRANCHES_KO[d.pillar.branch]!],
@@ -181,19 +190,59 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
   return [direction, ...entries];
 }
 
+const LUCK_RELATION_KO: Record<LuckRelation['kind'], string> = { ...RELATION_KO, same: '같은 글자' };
+
+/**
+ * 세운 근거(D-048): 그해 간지의 오행에 더해, 그 글자가 일간에게 갖는 뜻(십신·묶음)과 원국 글자와의 관계(같은 글자·합·충)를 적는다.
+ * 오행만 적으면 같은 해의 문장이 사주마다 거의 같아졌다(6차 측정).
+ */
 function seunEvidence(chart: SajuChart): Evidence[] {
-  return chart.seun.map((y, i): Evidence => ({
-    id: `seun[${i}]`,
-    kind: 'seun',
-    content: `${y.year}년 세운은 ${pillarLabel(y.pillar)}`,
-    sourceFields: [`seun[${i}]`],
-    chartRefs: [`seun[${i}]`],
-    terms: [pillarKo(y.pillar), pillarHanja(y.pillar), STEMS_KO[y.pillar.stem]!, BRANCHES_KO[y.pillar.branch]!],
-  }));
+  const day = chart.pillars.day.stem;
+  return chart.seun.map((y, i): Evidence => {
+    const tgs = tenGodOfStem(day, y.pillar.stem);
+    const tgb = tenGodOfBranch(day, y.pillar.branch);
+    const meaning = `일간 기준 천간 ${stemLabel(y.pillar.stem)}은(는) ${TEN_GOD_KO[tgs]}(${groupKoOf(tgs)}), 지지 ${branchLabel(y.pillar.branch)}은(는) ${TEN_GOD_KO[tgb]}(${groupKoOf(tgb)})`;
+    const rels = luckRelations(chart.pillars, y.pillar);
+    const relText = rels.length
+      ? rels.map((r) => {
+          const own = r.luckPart === 'stem' ? `천간 ${stemLabel(y.pillar.stem)}` : `지지 ${branchLabel(y.pillar.branch)}`;
+          return `${own} ↔ ${refLabel(chart, r.ref).text}: ${LUCK_RELATION_KO[r.kind]}${r.resultElement ? `(${elementLabel(r.resultElement)})` : ''}`;
+        }).join(', ')
+      : '같은 글자·합·충 없음';
+    return {
+      id: `seun[${i}]`,
+      kind: 'seun',
+      content: `${y.year}년 세운은 ${pillarLabel(y.pillar)}: ${luckElements(y.pillar)}. ${meaning}. 원국과의 관계: ${relText}`,
+      sourceFields: [`seun[${i}]`],
+      chartRefs: [`seun[${i}]`, ...new Set(rels.map((r) => r.ref))],
+      terms: [
+        pillarKo(y.pillar), pillarHanja(y.pillar), STEMS_KO[y.pillar.stem]!, BRANCHES_KO[y.pillar.branch]!,
+        TEN_GOD_KO[tgs], TEN_GOD_KO[tgb],
+        ...new Set(rels.flatMap((r) => refLabel(chart, r.ref).terms)),
+      ],
+    };
+  });
 }
 
-export function buildEvidence(chart: SajuChart): Evidence[] {
-  return [
+function groupKoOf(tg: TenGod): string {
+  return TEN_GOD_GROUPS.find((g) => (g.members as readonly string[]).includes(tg))!.ko;
+}
+
+/**
+ * 아이 리포트(만 12세 이하)의 근거 문구(D-051, 사업자 결정): "나를 나타내는 글자"를 "아이를 나타내는 글자"로 바꾼다.
+ * 근거 문구의 "일간(나를 나타내는 글자)을 뺀"을 모델이 그대로 옮겨 아이 리포트에서 "나를 뺀" 위반이 거의 모든 시도에 나왔다.
+ * 문구만 바꾸고 id·인용 규칙·숫자는 그대로다. 이미 바뀐 근거에 다시 써도 같다
+ */
+export function childVoiceEvidence(e: Evidence): Evidence {
+  const content = e.content
+    .replace('일간(나를 나타내는 글자)을 뺀', '아이를 나타내는 글자를 뺀')
+    .replace('일간(나를 나타내는 글자)', '일간(아이를 나타내는 글자)');
+  return content === e.content ? e : { ...e, content };
+}
+
+/** opts.child: 아이 리포트 근거 문구(childVoiceEvidence). 어른은 그대로 */
+export function buildEvidence(chart: SajuChart, opts: { child?: boolean } = {}): Evidence[] {
+  const all = [
     dayMasterEvidence(chart),
     ...pillarEvidence(chart),
     ...tenGodEvidence(chart),
@@ -203,6 +252,7 @@ export function buildEvidence(chart: SajuChart): Evidence[] {
     ...daewoonEvidence(chart),
     ...seunEvidence(chart),
   ];
+  return opts.child ? all.map(childVoiceEvidence) : all;
 }
 
 /** chartRef가 차트의 실제 위치를 가리키는지 */
