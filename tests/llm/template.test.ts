@@ -62,10 +62,13 @@ describe('총평 템플릿', () => {
     expect(summaryTemplate(charts[3]!)).toEqual(summaryTemplate(charts[3]!));
   });
 
-  it('조사가 받침에 맞는다 (화·토·수 일간은 "~라", 목·금은 "~이라")', () => {
+  it('쉬운 말로 쓰고, 조사가 받침에 맞는다 (갑·을·병·정·경·신·임 → "~이라", 무·기·계 → "~라")', () => {
     for (const c of charts) {
       const first = summaryTemplate(c)[0]!.text;
-      expect(first).toMatch(/^일간이 .(목\(..\)이라|화\(..\)라|토\(..\)라|금\(..\)이라|수\(..\)라), /);
+      expect(first).toMatch(/^나를 나타내는 글자가 (나무|불|흙|쇠|물)의 기운인 ([갑을병정경신임]\(.\)이라|[무기계]\(.\)라), /);
     }
+    for (const c of charts) for (const s of summaryTemplate(c)) expect(s.text).not.toMatch(/일간|오행|[목화토금수]\(/);
+    const lines = charts.map((c) => summaryTemplate(c)[1]!.text);
+    expect(lines.some((t) => /흙이 \d개로/.test(t) || /쇠가 없/.test(t) || /나무가/.test(t))).toBe(true);
   });
 });

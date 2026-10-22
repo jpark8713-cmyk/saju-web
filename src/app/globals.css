@@ -240,18 +240,21 @@ a:hover {
   flex-direction: column;
   gap: 8px;
 }
+/* 문장 끝 [근거] 버튼 (D-042 시안 A) */
 .ref-button {
   margin-left: 4px;
-  padding: 0 4px;
+  padding: 1px 8px;
   border: 1px solid var(--accent);
+  border-radius: 12px;
   background: transparent;
   color: var(--accent);
   font: inherit;
   font-size: 12px;
+  line-height: 20px;
   cursor: pointer;
   white-space: nowrap;
 }
-.ref-button[aria-pressed='true'] {
+.ref-button[aria-expanded='true'] {
   background: var(--accent);
   color: var(--paper);
 }
@@ -260,11 +263,84 @@ a:hover {
   font-size: 12px;
   margin-left: 2px;
 }
-.selected-evidence {
+/* 문장 아래에 펼쳐지는 근거 카드 */
+.evidence-card {
+  margin-top: 8px;
   background: var(--card);
+  border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  padding: 8px 10px;
+  padding: 10px 12px;
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fact + .fact {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.fact-text {
+  margin: 0 0 4px;
+}
+/* 근거 카드 안 8글자 미니 차트 */
+.mini-chart {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.mini-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+  min-width: 0;
+}
+.mini-title {
+  font-size: 11px;
+  color: var(--muted);
+}
+.mini-glyph {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+  border: 1px solid var(--line);
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: 18px;
+  line-height: 1.3;
+}
+.mini-glyph small {
+  font-family: var(--sans);
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--muted);
+}
+/* 강조: 색만이 아니라 테두리로 구분한다 */
+.mini-glyph.is-on {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: #fbe9e2;
+}
+/* 전체 근거 목록 */
+.fold-button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.evidence-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .evidence-list {
   margin: 0;
@@ -272,8 +348,61 @@ a:hover {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
+  line-height: 1.6;
+}
+[data-mode='screen'] .evidence-list > li {
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+.evidence-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+.evidence-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.evidence-detail {
+  margin: 6px 0 0;
+  padding: 6px 8px 6px 22px;
+  background: var(--paper);
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.used-by {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.used-by a {
+  display: block;
+  padding: 4px 0 4px 6px;
+  border-left: 2px solid var(--gold);
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-decoration: none;
+}
+.used-where {
+  color: var(--muted);
+}
+.link-button {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
 }
 .locked {
   background: var(--card);
@@ -419,4 +548,12 @@ a:hover {
   .no-print {
     display: none !important;
   }
+}
+
+/* 풀이 각도의 뜻 전체(D-047): PDF 사실 목록에서 사실 문장 아래 한 줄씩 */
+.fact-meaning {
+  display: block;
+  font-size: 0.86em;
+  color: var(--muted);
+  margin-top: 2px;
 }

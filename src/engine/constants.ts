@@ -76,10 +76,19 @@ export function branchLabel(branch: number): string {
 }
 
 /** 십신 그룹: 일간 기준 오행 관계 순서(같음→생함→극함→극당함→생받음)와 같은 순서 */
+// plain: 고객에게 보여 주는 쉬운 이름(D-042). 풀이 문장·근거 목록 모두 이 표기를 쓰고, 문장 검증도 이 표기로 그룹을 확인한다
 export const TEN_GOD_GROUPS = [
-  { id: 'bigeop', ko: '비겁', members: ['bigyeon', 'geobjae'] },
-  { id: 'siksang', ko: '식상', members: ['siksin', 'sanggwan'] },
-  { id: 'jaeseong', ko: '재성', members: ['pyeonjae', 'jeongjae'] },
-  { id: 'gwanseong', ko: '관성', members: ['pyeongwan', 'jeonggwan'] },
-  { id: 'inseong', ko: '인성', members: ['pyeonin', 'jeongin'] },
-] as const satisfies readonly { id: string; ko: string; members: readonly TenGod[] }[];
+  { id: 'bigeop', ko: '비겁', plain: '자립·경쟁', members: ['bigyeon', 'geobjae'] },
+  { id: 'siksang', ko: '식상', plain: '표현·재능', members: ['siksin', 'sanggwan'] },
+  { id: 'jaeseong', ko: '재성', plain: '재물·활동', members: ['pyeonjae', 'jeongjae'] },
+  { id: 'gwanseong', ko: '관성', plain: '규칙·책임', members: ['pyeongwan', 'jeonggwan'] },
+  { id: 'inseong', ko: '인성', plain: '배움·보살핌', members: ['pyeonin', 'jeongin'] },
+] as const satisfies readonly { id: string; ko: string; plain: string; members: readonly TenGod[] }[];
+
+/** 오행의 쉬운 이름 (나무·불·흙·쇠·물) */
+export const ELEMENT_PLAIN: Record<Element, string> = {
+  wood: '나무', fire: '불', earth: '흙', metal: '쇠', water: '물',
+};
+/** 기둥 자리의 쉬운 이름 */
+export const POSITION_PLAIN = { year: '태어난 해', month: '태어난 달', day: '태어난 날', hour: '태어난 시' } as const;
+export const PART_PLAIN = { stem: '윗글자', branch: '아랫글자' } as const;

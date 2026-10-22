@@ -8,6 +8,7 @@
 //     단, 일반 낱말과 겹치는 이름(기사·임신·정해 등)은 1)·3)·4)로만 찾는다
 //  2)~5)는 모두 앞이 낱말 경계여야 한다 ("안정을 목표"의 "을 목"이 아님)
 //  6) 십신·그룹 이름(칠살 = 편관). 앞이 낱말 경계여야 하고, "상관없이"·"인성 교육"처럼 일반 낱말인 경우는 뺀다
+//  7) 십신 그룹의 쉬운 표기(표현·재능, 재물·활동 등). 그룹 이름을 쓴 것과 같게 본다(D-042)
 //  조사에는 서술격 어미(입니다·이라서·이며·인·답게 등)도 포함한다
 import { BRANCHES_HANJA, BRANCHES_KO, STEMS_HANJA, STEMS_KO, TEN_GOD_GROUPS, TEN_GOD_KO } from '../engine/constants';
 import type { Evidence } from '../engine/types';
@@ -24,7 +25,8 @@ const COMMON_WORD_PILLARS = new Set([
 /** 천간+오행이 들어간 일반 낱말 (조사가 붙어도 일반 뜻인 경우) */
 const STEM_ELEMENT_FALSE_FRIENDS = /정화(?=를 위|가 필요|시켜| ?(작업|시간|활동|과정|장치|조|수))/gu;
 /** 십신처럼 보이는 일반 낱말 */
-const TEN_GOD_FALSE_FRIENDS = /상관\s?(?:없|이\s?없|하지|관계|도\s?없)|상관관계|인성(?= ?(교육|이 (좋|바르|착|따뜻)))/gu;
+const TEN_GOD_FALSE_FRIENDS =
+  /상관\s?(?:없|이\s?없|하지|관계|도\s?없)|상관관계|인성(?= ?(교육|이 (좋|바르|착|따뜻)))|관성(?=적|의 법칙)|비겁(?=하|한|함|해)|식상(?=하|한|함|해)/gu;
 
 // 조사와 서술격 어미 (긴 것부터)
 const PARTICLE =
@@ -50,7 +52,15 @@ const GROUP_MEMBERS: Record<string, string[]> = Object.fromEntries(
   TEN_GOD_GROUPS.map((g) => [g.ko, g.members.map((m) => TEN_GOD_KO[m])]),
 );
 
-/** 문장에서 찾은 표기. 한자는 글자 단위, 천간+오행은 천간 한 글자, 60갑자는 이름 그대로 */
+/** 십신·그룹 이름(칠살은 편관으로). "상관없이"처럼 일반 낱말인 경우는 뺀다 */
+export function tenGodNames(text: string): string[] {
+  return [...text.replace(TEN_GOD_FALSE_FRIENDS, '').matchAll(tenGodRe)].map((m) => (m[1] === '칠살' ? '편관' : m[1]!));
+}
+
+/** 십신 그룹의 쉬운 표기(표현·재능 등, D-042). 문장에 있으면 그 그룹 이름을 쓴 것으로 본다 */
+const plainGroupRe = TEN_GOD_GROUPS.map((g) => ({ ko: g.ko, re: new RegExp(g.plain.replace('·', '\\s?·\\s?'), 'u') }));
+
+/** 문장에서 찾은 표기. 한자는 글자 단위, 천간+오행은 천간 한 글자, 60갑자는 이름 그대로, 쉬운 그룹 표기는 그룹 이름 */
 export function extractTerms(text: string): string[] {
   const found = new Set<string>();
   for (const ch of text) if (HANJA_CHARS.has(ch)) found.add(ch);
@@ -58,7 +68,8 @@ export function extractTerms(text: string): string[] {
   for (const m of text.matchAll(pillarShortRe)) found.add(m[1]!);
   for (const m of text.matchAll(pillarParticleRe)) if (!COMMON_WORD_PILLARS.has(m[1]!)) found.add(m[1]!);
   for (const m of text.replace(STEM_ELEMENT_FALSE_FRIENDS, '').matchAll(stemElementRe)) found.add(m[1]!.charAt(0));
-  for (const m of text.replace(TEN_GOD_FALSE_FRIENDS, '').matchAll(tenGodRe)) found.add(m[1] === '칠살' ? '편관' : m[1]!);
+  for (const name of tenGodNames(text)) found.add(name);
+  for (const g of plainGroupRe) if (g.re.test(text)) found.add(g.ko);
   return [...found];
 }
 

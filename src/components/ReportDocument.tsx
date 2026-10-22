@@ -1,9 +1,13 @@
 'use client';
 // 리포트 템플릿 하나로 화면과 PDF를 함께 만든다(SPEC Phase 3). 미리보기도 같은 틀을 쓰고 잠긴 섹션은 제목만 보인다.
-// 화면: 문장 끝 [근거 n] 버튼 → 차트의 해당 글자에 테두리 강조 + 근거 설명. 다른 버튼을 누르면 강조가 옮겨 간다.
-// PDF: 버튼 대신 문장 끝 번호(①②…)와 끝의 "풀이 근거 목록". 번호는 화면과 같다(같은 데이터에서 만든다).
+// 화면(D-042 시안 A): 문장 끝 [근거] 버튼 → 그 문장 바로 아래에 사실 한두 줄 + 8글자 미니 차트(해당 글자 강조)가 펼쳐진다.
+//   위쪽 큰 차트도 같은 글자를 강조한다. 전체 사실 목록은 "전체 근거 보기"로 접어 두고, 사실마다 그 사실을 쓴 문장(↳)을 보여 준다.
+// PDF: 버튼 대신 문장 끝 각주 번호(①②…)와 끝의 사실 목록(접힘 없음, 쉬운 문구만). 번호는 화면 목록 순서와 같다.
 import { useMemo, useState } from 'react';
 import { SERVICE } from '../config/business';
+import { ELEMENT_PLAIN, POSITION_PLAIN } from '../engine/constants';
+import type { ChartView } from '../report/chartView';
+import { EVIDENCE_GROUP_ORDER, EVIDENCE_GROUP_TITLES } from '../report/evidenceTerms';
 import type { EvidenceItem, PreviewView, ReportView, SentenceView } from '../report/view';
 import { ChartGrid, ElementBars, LuckTable } from './ChartGrid';
 
@@ -14,30 +18,116 @@ export function circled(n: number): string {
   return n >= 1 && n <= CIRCLED.length ? CIRCLED[n - 1]! : `(${n})`;
 }
 
-function Sentence({ s, mode, selected, onSelect }: { s: SentenceView; mode: DocMode; selected: number | null; onSelect: (n: number) => void }) {
+const PILLAR_REF = /^(year|month|day|hour)\.(stem|branch)$/;
+
+/** 근거 카드 안의 8글자 미니 차트. 문장을 읽는 자리에서는 위쪽 큰 차트가 안 보여서 둔다 */
+function MiniChart({ chart, highlighted }: { chart: ChartView; highlighted: ReadonlySet<string> }) {
   return (
-    <li>
-      {s.text}
-      {mode === 'screen'
-        ? s.refs.map((n) => (
-            <button key={n} type="button" className="ref-button" aria-pressed={selected === n} onClick={() => onSelect(n)} data-ref-n={n}>
-              근거 {n}
-            </button>
-          ))
-        : s.refs.map((n) => (
-            <span key={n} className="ref-num" data-ref-n={n}>
-              {circled(n)}
-            </span>
+    <div className="mini-chart" aria-hidden="true" data-testid="mini-chart">
+      {chart.pillars.map((p) => (
+        <div key={p.position} className="mini-col">
+          <span className="mini-title">{POSITION_PLAIN[p.position]}</span>
+          {p.stem && p.branch ? (
+            [p.stem, p.branch].map((g) => (
+              <span key={g.ref} className={highlighted.has(g.ref) ? 'mini-glyph is-on' : 'mini-glyph'} data-ref={g.ref}>
+                <span className={`el-${g.element}`}>{g.hanja}</span>
+                <small>
+                  {g.ko} · {ELEMENT_PLAIN[g.element]}
+                </small>
+              </span>
+            ))
+          ) : (
+            <span className="mini-glyph">모름</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 사실 하나: 미니 차트(글자에 대한 사실만) + 쉬운 문장 + 자세히(용어 풀이·전문 표기) */
+function FactCard({ item, chart, cardId, note }: { item: EvidenceItem; chart: ChartView; cardId: string; note?: string }) {
+  const [open, setOpen] = useState(false);
+  const glyphRefs = new Set(item.chartRefs.filter((r) => PILLAR_REF.test(r)));
+  const detailId = `${cardId}-detail-${item.n}`;
+  return (
+    <div className="fact" data-fact-id={item.id}>
+      {glyphRefs.size > 0 && <MiniChart chart={chart} highlighted={glyphRefs} />}
+      <p className="fact-text">{item.content}</p>
+      <button type="button" className="link-button" aria-expanded={open} aria-controls={open ? detailId : undefined} onClick={() => setOpen((o) => !o)}>
+        {open ? '자세히 닫기' : '자세히(용어·전문 표기)'}
+      </button>
+      {open && (
+        <ul id={detailId} className="evidence-detail" data-testid="evidence-detail">
+          {/* 풀이 각도(D-047): 그 기운·묶음의 뜻 전체와 이 문장이 풀린 쪽 */}
+          {(item.meanings ?? []).map((m) => (
+            <li key={m} data-testid="fact-meaning">{m}</li>
           ))}
+          {note && <li data-testid="fact-angle-note">{note}</li>}
+          {item.detail.map((d) => (
+            <li key={d}>{d}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+interface SentenceCtx {
+  mode: DocMode;
+  open: string | null;
+  onToggle: (id: string) => void;
+  evidence: readonly EvidenceItem[];
+  chart: ChartView;
+}
+
+function Sentence({ s, ctx }: { s: SentenceView; ctx: SentenceCtx }) {
+  if (ctx.mode === 'pdf') {
+    return (
+      <li>
+        {s.text}
+        {s.refs.map((n) => (
+          <span key={n} className="ref-num" data-ref-n={n}>
+            {circled(n)}
+          </span>
+        ))}
+      </li>
+    );
+  }
+  const isOpen = ctx.open === s.id;
+  const cardId = `evidence-card-${s.id}`;
+  const facts = s.refs.flatMap((n) => ctx.evidence.filter((e) => e.n === n));
+  return (
+    <li id={`sentence-${s.id}`} data-sentence-id={s.id}>
+      {s.text}
+      {facts.length > 0 && (
+        <button
+          type="button"
+          className="ref-button"
+          aria-expanded={isOpen}
+          aria-controls={isOpen ? cardId : undefined}
+          onClick={() => ctx.onToggle(s.id)}
+          data-refs={s.refs.join(',')}
+        >
+          근거{facts.length > 1 ? ` ${facts.length}` : ''}
+        </button>
+      )}
+      {isOpen && (
+        <div id={cardId} className="evidence-card" data-testid="evidence-card">
+          {facts.map((f) => (
+            <FactCard key={f.n} item={f} chart={ctx.chart} cardId={cardId} note={s.angleNotes?.[f.n]} />
+          ))}
+        </div>
+      )}
     </li>
   );
 }
 
-function Sentences(props: { list: readonly SentenceView[]; mode: DocMode; selected: number | null; onSelect: (n: number) => void }) {
+function Sentences({ list, ctx }: { list: readonly SentenceView[]; ctx: SentenceCtx }) {
   return (
     <ul className="sentences">
-      {props.list.map((s, i) => (
-        <Sentence key={i} s={s} mode={props.mode} selected={props.selected} onSelect={props.onSelect} />
+      {list.map((s) => (
+        <Sentence key={s.id} s={s} ctx={ctx} />
       ))}
     </ul>
   );
@@ -53,26 +143,92 @@ function SectionHead({ title, badge }: { title: string; badge?: 'free' | 'lock' 
   );
 }
 
+/** 전체 사실 목록. 화면은 접어 두고, PDF는 번호와 함께 모두 보여 준다 */
 function EvidenceList({ items, mode }: { items: readonly EvidenceItem[]; mode: DocMode }) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState(false);
+  const groups = EVIDENCE_GROUP_ORDER.map((g) => ({ g, list: items.filter((e) => e.group === g) })).filter((x) => x.list.length > 0);
+  const shown = mode === 'pdf' || open;
   return (
     <section className="section" data-testid="evidence-list" aria-label="풀이 근거 목록">
       <SectionHead title="풀이 근거 목록" />
-      <ol className="evidence-list">
-        {items.map((e) => (
-          <li key={e.id} data-evidence-n={e.n}>
-            {mode === 'pdf' ? circled(e.n) : `근거 ${e.n}`} · {e.content}
-          </li>
-        ))}
-      </ol>
+      {mode === 'screen' && (
+        <button
+          type="button"
+          className="fold-button"
+          aria-expanded={open}
+          aria-controls={open ? 'evidence-groups' : undefined}
+          onClick={() => setOpen((o) => !o)}
+          data-testid="evidence-list-toggle"
+        >
+          <span>
+            {open ? '전체 근거 접기' : '전체 근거 보기'} (사실 {items.length}개)
+          </span>
+          <span aria-hidden="true">{open ? '▲' : '▼'}</span>
+        </button>
+      )}
+      {shown && (
+        <div id="evidence-groups" className="evidence-groups">
+          {mode === 'screen' && (
+            <div className="evidence-tools">
+              <span className="hint">↳ 줄을 누르면 그 사실을 쓴 풀이 문장으로 이동해요.</span>
+              <button type="button" className="link-button" aria-pressed={detail} onClick={() => setDetail((d) => !d)} data-testid="evidence-detail-toggle">
+                {detail ? '전문 표기 숨기기' : '전문 표기 보기'}
+              </button>
+            </div>
+          )}
+          {groups.map(({ g, list }) => (
+            <div key={g} className="evidence-group" data-evidence-group={g}>
+              <h3 className="h3">{EVIDENCE_GROUP_TITLES[g]}</h3>
+              <ol className="evidence-list">
+                {list.map((e) => (
+                  <li key={e.id} data-evidence-n={e.n}>
+                    {mode === 'pdf' && <span className="fact-num">{circled(e.n)} </span>}
+                    <span data-testid="fact-text">{e.content}</span>
+                    {/* PDF에는 "이 문장은…" 줄 없이 뜻 전체만 남긴다(사업자 결정, D-047) */}
+                    {mode === 'pdf' && (e.meanings ?? []).map((m) => (
+                      <span key={m} className="fact-meaning" data-testid="fact-meaning">{m}</span>
+                    ))}
+                    {mode === 'screen' && detail && (
+                      <ul className="evidence-detail" data-testid="evidence-detail">
+                        {(e.meanings ?? []).map((m) => (
+                          <li key={m} data-testid="fact-meaning">{m}</li>
+                        ))}
+                        {e.detail.map((d) => (
+                          <li key={d}>{d}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {mode === 'screen' && e.usedBy.length > 0 && (
+                      <div className="used-by">
+                        {e.usedBy.map((u) => (
+                          <a key={u.sentenceId} href={`#sentence-${u.sentenceId}`} data-testid="used-by">
+                            ↳ <span className="used-where">{u.where}</span> · {u.text}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
 export function ReportDocument({ view, mode, afterPreview }: { view: ReportView | PreviewView; mode: DocMode; afterPreview?: React.ReactNode }) {
-  const [selected, setSelected] = useState<number | null>(null);
-  const select = (n: number) => setSelected((cur) => (cur === n ? null : n));
-  const selectedItem = view.evidence.find((e) => e.n === selected) ?? null;
-  const highlighted = useMemo(() => new Set<string>(selectedItem?.chartRefs ?? []), [selectedItem]);
+  const [open, setOpen] = useState<string | null>(null);
+  const sentences = view.kind === 'preview' ? view.summary : view.sections.flatMap((x) => x.groups.flatMap((g) => g.sentences));
+  const openRefs = sentences.find((s) => s.id === open)?.refs;
+  // 근거를 펼친 문장의 사실이 가리키는 칸을 위쪽 큰 차트에서도 강조한다
+  const highlighted = useMemo(
+    () => new Set<string>(view.evidence.filter((e) => openRefs?.includes(e.n)).flatMap((e) => e.chartRefs)),
+    [view.evidence, openRefs],
+  );
+  const ctx: SentenceCtx = { mode, open, onToggle: (id) => setOpen((cur) => (cur === id ? null : id)), evidence: view.evidence, chart: view.chart };
   const isPreview = view.kind === 'preview';
   const name = view.cover.name;
 
@@ -95,9 +251,20 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
         <SectionHead title="사주 차트" badge={isPreview ? 'free' : undefined} />
         <ChartGrid chart={view.chart} highlighted={highlighted} />
         {!isPreview && <LuckTable chart={view.chart} highlighted={highlighted} />}
-        {mode === 'screen' && selectedItem && (
-          <div className="selected-evidence" role="status" aria-live="polite" data-testid="selected-evidence">
-            근거 {selectedItem.n} 선택됨 · {selectedItem.content}
+        {view.basis.notices.length > 0 && (
+          <div className="box" role="note" data-testid="chart-notices" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {view.basis.notices.map((n) => (
+              <div key={n.code} data-notice={n.code}>
+                <p className="meta" style={{ margin: 0 }}>{n.message}</p>
+                {n.details.length > 0 && (
+                  <ul className="hint" style={{ margin: 0, paddingLeft: 18 }}>
+                    {n.details.map((d) => (
+                      <li key={d}>{d}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </section>
@@ -111,7 +278,7 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
         <>
           <section className="section" data-section="summary">
             <SectionHead title="총평" badge="free" />
-            <Sentences list={view.summary} mode={mode} selected={selected} onSelect={select} />
+            <Sentences list={view.summary} ctx={ctx} />
           </section>
           {view.locked.map((l) => (
             <section key={l.id} className="section" data-section={l.id} data-locked="true">
@@ -128,7 +295,7 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
             {sec.groups.map((g, i) => (
               <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {g.subtitle && <h3 className="h3">{g.subtitle}</h3>}
-                <Sentences list={g.sentences} mode={mode} selected={selected} onSelect={select} />
+                <Sentences list={g.sentences} ctx={ctx} />
               </div>
             ))}
           </section>

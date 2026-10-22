@@ -47,19 +47,53 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
 test('입력 화면: 필수값·동의가 없으면 버튼이 꺼지고 한국어 문구, 음력에서만 윤달, 시간 모름이면 시·분 비활성', async ({ page }) => {
   await page.goto('/input');
   await expect(page.getByTestId('input-submit')).toBeDisabled();
-  await expect(page.getByTestId('missing-fields')).toContainText('생년월일');
+  // 빠진 항목을 버튼 아래에 문장으로 알려 준다
+  const missing = page.getByTestId('missing-fields');
+  for (const text of ['생년월일을 입력해 주세요.', '태어난 시간을 입력하거나 "모름"을 선택해 주세요.', '성별을 선택해 주세요.', '개인정보 수집·이용 동의가 필요해요.']) {
+    await expect(missing).toContainText(text);
+  }
+  // 시만 고르고 분을 비우면 분까지 고르라고 알려 준다
+  await page.getByLabel('시', { exact: true }).selectOption('14');
+  await expect(missing).toContainText('태어난 시간의 분까지 선택해 주세요.');
+  await page.getByLabel('분', { exact: true }).selectOption('30');
+  await expect(missing).not.toContainText('태어난 시간');
+  await page.getByLabel('시', { exact: true }).selectOption('');
+  await page.getByLabel('분', { exact: true }).selectOption('');
   await expect(page.getByTestId('leap-month')).toHaveCount(0);
   await page.getByLabel('음력').check();
   await expect(page.getByTestId('leap-month')).toBeVisible();
   await page.getByLabel('태어난 해').fill('1800');
   await page.getByLabel('태어난 해').blur();
-  await expect(page.getByText('1900~2050년 사이로 입력해 주세요.')).toBeVisible();
+  await expect(page.locator('#date-error')).toHaveText('1900~2050년 사이로 입력해 주세요.');
   await page.getByTestId('time-unknown').check();
   await expect(page.getByLabel('시', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('분', { exact: true })).toBeDisabled();
   await page.getByTestId('consent').check();
   await page.getByTestId('consent').uncheck();
-  await expect(page.getByText('개인정보 수집·이용에 동의해 주세요.')).toBeVisible();
+  await expect(page.locator('#consent-error')).toHaveText('개인정보 수집·이용 동의가 필요해요.');
+});
+
+test('태어난 지역: 시도를 고른 뒤 시군구를 고르고, 같은 이름(광주)도 시도별로 구분된다', async ({ page }) => {
+  await fillBirth(page);
+  const province = page.getByTestId('region-province');
+  const district = page.getByTestId('region-district');
+  await expect(province.locator('option').first()).toHaveText('모름 · 해외 (서울 기준 동경 127°)');
+  await expect(district).toBeDisabled();
+  await province.selectOption({ label: '경기' });
+  await expect(district).toBeEnabled();
+  await expect(district).toHaveValue('gyeonggi');
+  await district.selectOption({ label: '광주시' });
+  await expect(district).toHaveValue('gyeonggi:광주시');
+  // 시도를 바꾸면 시군구는 "시군구 모름"으로 돌아간다
+  await province.selectOption({ label: '광주' });
+  await expect(district).toHaveValue('gwangju');
+  await expect(district.locator('option')).toHaveText(['시군구 모름', '동구', '서구', '남구', '북구', '광산구']);
+  await district.selectOption({ label: '북구' });
+  await expect(page.getByTestId('input-submit')).toBeEnabled();
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('preview-document')).toBeVisible();
+  // 미리보기 근거에 실제 쓴 경도가 나온다
+  await expect(page.getByTestId('preview-document')).toContainText('동경 126.91°');
 });
 
 test('음력 윤달 + 시간 모름으로 미리보기까지, 없는 윤달은 서버 검증 문구로 돌아온다', async ({ page }) => {
@@ -87,11 +121,17 @@ test('미리보기 응답과 HTML 소스에 잠긴 본문이 없고, 총평 근�
   expect(html).not.toContain('개발용 가짜 문장');
   expect(await page.locator('[data-locked="true"] li').count()).toBe(0);
 
+  // 근거 버튼을 누르면 문장 바로 아래에 사실 카드와 미니 차트(해당 글자 강조)가 펼쳐진다(D-042 시안 A)
   const btn = page.locator('[data-section="summary"] .ref-button').first();
   await btn.click();
-  await expect(btn).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('selected-evidence')).toBeVisible();
+  await expect(btn).toHaveAttribute('aria-expanded', 'true');
+  const card = page.getByTestId('evidence-card');
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText('나를 나타내는 글자는');
+  await expect(card.locator('.mini-glyph.is-on')).toHaveCount(1);
   expect(await page.locator('.is-highlighted').count()).toBeGreaterThan(0);
+  await btn.click();
+  await expect(card).toHaveCount(0);
 });
 
 test('받는 방법을 모두 해제하면 "다음"이 꺼지고, 이메일은 고를 때만 입력란이 나온다', async ({ page }) => {
@@ -108,41 +148,82 @@ test('받는 방법을 모두 해제하면 "다음"이 꺼지고, 이메일은 �
   await expect(page.getByTestId('price-total')).toContainText('13,000원');
 });
 
-test('리포트 근거 버튼: 키보드로 누르면 강조, 다른 문장을 누르면 강조가 옮겨 간다', async ({ page }) => {
+test('리포트 근거 버튼: 키보드로 누르면 문장 아래에 근거가 펼쳐지고, 다른 문장을 누르면 그쪽으로 옮겨 간다', async ({ page }) => {
   await toPreview(page);
   await toCheckout(page, []);
   await pay(page);
   await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
   const buttons = page.locator('[data-testid="report-document"] .ref-button');
   const first = buttons.first();
-  // 다른 근거를 가리키는 버튼을 찾는다
-  const firstN = await first.getAttribute('data-ref-n');
-  const other = page.locator(`[data-testid="report-document"] .ref-button:not([data-ref-n="${firstN}"])`).first();
+  // 다른 사실을 가리키는 버튼을 찾는다
+  const firstRefs = await first.getAttribute('data-refs');
+  const other = page.locator(`[data-testid="report-document"] .ref-button:not([data-refs="${firstRefs}"])`).first();
 
   await first.focus();
   await page.keyboard.press('Enter');
-  await expect(first).toHaveAttribute('aria-pressed', 'true');
+  await expect(first).toHaveAttribute('aria-expanded', 'true');
   const before = await page.locator('.is-highlighted').evaluateAll((els) => els.map((e) => e.getAttribute('data-ref')));
   expect(before.length).toBeGreaterThan(0);
 
   await other.focus();
   await page.keyboard.press('Space');
-  await expect(other).toHaveAttribute('aria-pressed', 'true');
-  await expect(first).toHaveAttribute('aria-pressed', 'false');
+  await expect(other).toHaveAttribute('aria-expanded', 'true');
+  await expect(first).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('evidence-card')).toHaveCount(1);
   const after = await page.locator('.is-highlighted').evaluateAll((els) => els.map((e) => e.getAttribute('data-ref')));
   expect(after).not.toEqual(before);
-  await expect(page.getByTestId('selected-evidence')).toContainText(`근거 ${await other.getAttribute('data-ref-n')}`);
+  // 카드는 그 문장 안에 있다(문장을 읽던 자리에서 바로 본다)
+  const cardId = await other.getAttribute('aria-controls');
+  await expect(page.locator(`li:has(> [aria-controls="${cardId}"]) > [data-testid="evidence-card"]`)).toBeVisible();
+  // "자세히"를 누르면 용어 풀이·전문 표기가 나온다
+  const card = page.getByTestId('evidence-card');
+  await card.getByRole('button', { name: '자세히(용어·전문 표기)' }).first().click();
+  await expect(card.getByTestId('evidence-detail').first()).toBeVisible();
   // 강조는 색이 아니라 테두리(outline)로도 구분된다
   const outline = await page.locator('.is-highlighted').first().evaluate((e) => getComputedStyle(e).outlineStyle);
   expect(outline).toBe('solid');
+  await expectNoHorizontalScroll(page);
 });
 
-test('PDF: 번호와 "풀이 근거 목록"이 화면과 일치하고 Noto 글꼴이 들어간다', async ({ page }) => {
+test('풀이 근거 목록: 기본은 접혀 있고, 펼치면 쉬운 사실 + 그 사실을 쓴 문장, 전문 표기는 버튼으로만', async ({ page }) => {
+  await toPreview(page);
+  await toCheckout(page, []);
+  await pay(page);
+  await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
+  const list = page.getByTestId('evidence-list');
+  await expect(list.locator('li')).toHaveCount(0);
+  const toggle = page.getByTestId('evidence-list-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.locator('[data-evidence-group]').first()).toHaveAttribute('data-evidence-group', 'natal');
+  const facts = await list.getByTestId('fact-text').allTextContents();
+  expect(facts[0]).toMatch(/^나를 나타내는 글자는 태어난 날의 윗글자/u);
+  expect(facts.filter((t) => /[은이을와]\((는|가|를|과)\)/u.test(t))).toEqual([]);
+  // 기본 문구에는 전문 용어가 없다
+  expect(facts.filter((t) => /일간|원국|천간|지지|[년월일시]주|오행|대운|세운|비견|겁재|식신|상관|편재|정재|편관|정관|편인|정인/u.test(t))).toEqual([]);
+  await expect(toggle).toContainText(`사실 ${facts.length}개`);
+  // ↳ 줄을 누르면 그 문장으로 이동한다
+  const use = list.getByTestId('used-by').first();
+  const href = await use.getAttribute('href');
+  expect(href).toMatch(/^#sentence-s\d+$/);
+  await use.click();
+  await expect(page).toHaveURL(new RegExp(`${href}$`));
+  await expect(page.locator(href!)).toBeInViewport();
+  // 전문 표기는 버튼을 눌러야 나온다
+  await expect(list.getByTestId('evidence-detail')).toHaveCount(0);
+  await page.getByTestId('evidence-detail-toggle').click();
+  await expect(list.getByTestId('evidence-detail').first()).toContainText('일간');
+  await expectNoHorizontalScroll(page);
+});
+
+test('PDF: 각주 번호와 사실 목록이 화면과 일치하고 Noto 글꼴이 들어간다', async ({ page }) => {
   await toPreview(page);
   await toCheckout(page, ['career']);
   await pay(page);
   await expect(page.getByTestId('screen-report')).toBeVisible({ timeout: 30_000 });
-  const screenList = await page.locator('[data-testid="evidence-list"] li').allTextContents();
+  await page.getByTestId('evidence-list-toggle').click();
+  const screenFacts = await page.locator('[data-testid="evidence-list"]').getByTestId('fact-text').allTextContents();
 
   const download = page.waitForEvent('download', { timeout: 60_000 });
   await page.getByTestId('pdf-download').click();
@@ -160,13 +241,22 @@ test('PDF: 번호와 "풀이 근거 목록"이 화면과 일치하고 Noto 글�
   const ctx = await page.context().browser()!.newContext({ extraHTTPHeaders: { 'x-order-token': order.accessToken } });
   const print = await ctx.newPage();
   await print.goto(`/report/${order.orderId}/print`);
-  const printList = await print.locator('[data-testid="evidence-list"] li').allTextContents();
-  expect(printList.map((t) => t.replace(/^\S+ · /, ''))).toEqual(screenList.map((t) => t.replace(/^근거 \d+ · /, '')));
-  expect(printList[0]).toMatch(/^① · /);
+  const printList = print.locator('[data-testid="evidence-list"]');
+  expect(await printList.getByTestId('fact-text').allTextContents()).toEqual(screenFacts);
+  const items = await printList.locator('.evidence-list > li').allTextContents();
+  expect(items[0]).toMatch(/^① 나를 나타내는 글자는/u);
+  // 각주 번호는 목록에 있는 번호만 가리킨다
+  const listed = new Set(items.map((t) => t.split(' ')[0]));
+  const refs = await print.locator('.ref-num').allTextContents();
+  expect(refs.length).toBeGreaterThan(0);
+  expect(refs.every((r) => listed.has(r))).toBe(true);
+  // PDF는 누를 수 없으니 접힘·전문 표기·↳ 줄·근거 버튼이 없다
+  expect(await print.getByTestId('evidence-list-toggle').count()).toBe(0);
+  expect(await print.getByTestId('evidence-detail-toggle').count()).toBe(0);
+  expect(await print.getByTestId('used-by').count()).toBe(0);
+  expect(await print.locator('.ref-button').count()).toBe(0);
   const sections = await print.locator('[data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
   expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'disclaimer']);
-  expect(await print.locator('.ref-button').count()).toBe(0);
-  expect(await print.locator('.ref-num').count()).toBeGreaterThan(0);
   await ctx.close();
 });
 
@@ -186,6 +276,30 @@ test('오류 A: 결제 실패 → 사유 표시, 다시 결제·미리보기 복
   await page.getByRole('link', { name: '미리보기로 돌아가기' }).click();
   await expect(page.getByRole('heading', { name: '김철수님의 사주' })).toBeVisible();
   await expect(page.getByTestId('topic-love')).toBeChecked();
+});
+
+test('목 결제창: 결제 뒤 뒤로 가기로 돌아와 다시 제출하면 JSON 대신 "이미 처리된 결제" 안내와 주문 화면 링크', async ({ page, request }) => {
+  await toPreview(page);
+  await toCheckout(page);
+  await pay(page, 'success');
+  await expect(page.getByTestId('screen-order')).toBeVisible();
+  const orderUrl = new URL(page.url()).pathname;
+  await page.goBack();
+  // 브라우저가 예전 결제창을 그대로 보여 주면 다시 제출하고, 새로 불러오면 바로 안내가 나온다
+  if (await page.getByTestId('mock-pg').isVisible()) {
+    await page.getByTestId('mock-pg-fail').check();
+    await page.getByTestId('mock-pg-submit').click();
+  }
+  const notice = page.getByTestId('mock-pg-processed');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('이미 처리된 결제예요');
+  await expect(page.locator('body')).not.toContainText('not_found');
+  // 서버를 다시 켠 뒤처럼 없는 결제창을 제출해도 안내 화면으로 간다
+  const res = await request.post('/api/dev/mock-pg', { form: { paymentKey: 'mock_unknown', outcome: 'fail', amount: '1' }, maxRedirects: 0 });
+  expect(res.status()).toBe(303);
+  await page.getByRole('link', { name: '주문 화면으로 가기' }).click();
+  await expect(page).toHaveURL(new RegExp(`${orderUrl}$`));
+  await expect(page.getByTestId('screen-order')).toBeVisible();
 });
 
 test('오류 B → D → E: 생성 실패, 다시 시도, 환불 요청(주문번호 자동 입력) 접수', async ({ page }) => {
@@ -399,4 +513,81 @@ test('이메일로 받기: 결제 화면에 보관 기간, 메일 1통의 링크
 
 test('운영이 아닌 개발 서버에서만 개발용 메일 보관함이 열린다(운영 빌드 확인은 prod.spec.ts)', async ({ request }) => {
   expect((await request.get('/api/dev/outbox')).status()).toBe(200);
+});
+
+test('분 모름: 경계가 없는 시는 바로 진행하고, 경계가 있는 시는 한 줄 더 묻고, 모름이면 시주 없이 가능한 시주를 안내한다', async ({ page }) => {
+  await fillBirth(page);
+  await page.getByTestId('region-province').selectOption({ label: '서울' });
+  await page.getByTestId('region-district').selectOption({ label: '종로구' });
+  const minute = page.getByLabel('분', { exact: true });
+  const submit = page.getByTestId('input-submit');
+  const question = page.getByTestId('minute-boundary');
+
+  // 14시: 그 시 안에 경계가 없다(1990-05-15 서울)
+  await page.getByLabel('시', { exact: true }).selectOption('14');
+  await minute.selectOption('unknown');
+  await expect(submit).toBeEnabled();
+  await expect(question).toHaveCount(0);
+
+  // 13시: 33분부터 미시로 바뀐다 → 한 줄 더 묻는다
+  await page.getByLabel('시', { exact: true }).selectOption('13');
+  await expect(question).toContainText('13시 33분 이전인가요, 이후인가요?');
+  await expect(submit).toBeDisabled();
+  await expect(page.getByTestId('missing-fields')).toContainText('13시 33분 이전인지 이후인지 골라 주세요');
+  await expect(question.getByRole('radio')).toHaveCount(3);
+  await question.getByRole('radio', { name: /33분 이후/ }).check();
+  await expect(submit).toBeEnabled();
+
+  // 모름 → 시주 없이, 차트 아래에 분 구간별 시주 안내
+  await question.getByRole('radio', { name: /^모름/ }).check();
+  await submit.click();
+  await expect(page.getByTestId('preview-document')).toBeVisible();
+  await expect(page.getByTestId('preview-document')).toContainText('13시대(분 모름, 시주 제외)');
+  const notices = page.getByTestId('chart-notices');
+  await expect(notices).toContainText('분을 모르셔서 시주 없이 풀었어요');
+  await expect(notices).toContainText('13:00~13:32 출생: 시주');
+  await expect(notices).toContainText('13:33~13:59 출생: 시주');
+  await expect(page.getByTestId('saju-chart')).toContainText('모름');
+});
+
+test('계산 오류 사례(가상 데이터): 음력 1967-07-01, 08시 분 모름, 경남 남해군, 남 → 미리보기까지', async ({ page }) => {
+  await fillBirth(page, { calendar: 'lunar', year: '1967', month: '7', day: '1' });
+  await page.getByLabel('시', { exact: true }).selectOption('8');
+  await page.getByLabel('분', { exact: true }).selectOption('unknown');
+  await page.getByLabel('남성').check();
+  await page.getByTestId('region-province').selectOption({ label: '경남' });
+  await page.getByTestId('region-district').selectOption({ label: '남해군' });
+  // 08시는 남해(127.89°)에서 그 시 안에 경계가 없어 질문 없이 진행한다
+  await expect(page.getByTestId('input-submit')).toBeEnabled();
+  await expect(page.getByTestId('minute-boundary')).toHaveCount(0);
+  const chart = page.waitForResponse('**/api/chart');
+  await page.getByTestId('input-submit').click();
+  expect((await chart).status()).toBe(200);
+  await expect(page.getByTestId('preview-document')).toBeVisible();
+  await expect(page.getByTestId('preview-document')).toContainText('음력 1967년 7월 1일 08시경(분 모름) · 남');
+  await expect(page.getByTestId('preview-document')).toContainText('동경 127.89°');
+});
+
+test('서버가 오류 페이지를 돌려주면 서버 문제일 가능성을 알리고, 계속되면 확인할 입력을 안내한다', async ({ page }) => {
+  await fillBirth(page);
+  await page.route('**/api/chart', (route) => route.fulfill({ status: 500, contentType: 'text/html', body: '<!DOCTYPE html><html><body>Internal Server Error</body></html>' }));
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('calc-failed')).toContainText('서버의 일시적인 문제일 가능성이 커요');
+  await expect(page.getByTestId('calc-retry')).toContainText('생년월일(양력·음력, 윤달), 태어난 시간, 태어난 지역');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
+
+test('음력 2050년 끝 무렵은 입력 화면으로 돌아가 음력 마지막 날짜를 알려 준다', async ({ page }) => {
+  await fillBirth(page, { calendar: 'lunar', year: '2050', month: '12', day: '15' });
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('screen-input')).toBeVisible();
+  await expect(page.locator('#date-error')).toHaveText('음력으로는 2050년 11월 18일(양력 2050년 12월 31일)까지만 계산할 수 있어요. 그 전 날짜로 입력해 주세요.');
+});
+
+test('서버에 연결하지 못하면 연결을 확인하라고 안내한다', async ({ page }) => {
+  await fillBirth(page);
+  await page.route('**/api/chart', (route) => route.abort('internetdisconnected'));
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('calc-failed')).toHaveText('서버에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
