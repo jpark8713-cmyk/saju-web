@@ -2,6 +2,8 @@
 // 결제(목 어댑터)·환불·발급 기록 등 Phase 4는 payments.test.ts·refunds.test.ts, 결과물 전달(Phase 5)은 delivery.test.ts에 있다.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isFakeLlmEnabled, isMockPaymentAllowed } from '../../src/config/flags';
+import { toLunar } from '../../src/engine/calendar';
+import { LUNAR_SUPPORTED_END } from '../../src/engine/settings';
 import { PRICES, priceFor } from '../../src/config/prices';
 import { createOrder, OrderInputError } from '../../src/orders/create';
 import { NotPaid, startGeneration } from '../../src/orders/generation';
@@ -22,7 +24,7 @@ describe('정보 입력 검증 (화면 2와 서버 공통)', () => {
       date: '생년월일을 입력해 주세요.',
       time: '태어난 시간을 입력하거나 "모름"을 선택해 주세요.',
       gender: '성별을 선택해 주세요.',
-      consent: '개인정보 수집·이용에 동의해 주세요.',
+      consent: '개인정보 수집·이용 동의가 필요해요.',
     });
   });
 
@@ -53,11 +55,12 @@ describe('정보 입력 검증 (화면 2와 서버 공통)', () => {
 
 describe('지원 범위 끝 (양력 2050-12-31까지)', () => {
   const lunar = (month: number, day: number) => buildPreview({ ...BIRTH, calendar: 'lunar', isLeapMonth: false, year: 2050, month, day });
-  it('양력으로 2050-12-31인 음력 2050-11-18은 받고, 그 다음 날부터는 범위 밖 문구로 거부한다', () => {
+  it('양력으로 2050-12-31인 음력 2050-11-18은 받고, 그 다음 날부터는 음력 마지막 날짜를 알려 주며 거부한다', () => {
+    expect(toLunar({ year: 2050, month: 12, day: 31 })).toMatchObject({ ...LUNAR_SUPPORTED_END, isLeapMonth: false });
     expect(lunar(11, 18).ok).toBe(true);
     for (const [m, d] of [[11, 19], [11, 20], [11, 29], [12, 1], [12, 30]] as const) {
       const r = lunar(m, d);
-      expect(!r.ok && r.errors.date).toBe('1900~2050년 사이로 입력해 주세요.');
+      expect(!r.ok && r.errors.date).toBe('음력으로는 2050년 11월 18일(양력 2050년 12월 31일)까지만 계산할 수 있어요. 그 전 날짜로 입력해 주세요.');
     }
   });
 
@@ -155,16 +158,15 @@ describe('리포트 생성', () => {
 });
 
 describe('리포트 뷰 (화면·PDF 공통)', () => {
-  it('근거 번호는 1부터 처음 나온 순서이고, 문장마다 근거가 있다', async () => {
+  it('근거 번호는 목록 순서대로 1부터이고(D-041), 문장이 가리키는 번호는 모두 목록에 있다', async () => {
     const store = new MemoryStore();
     const o = await paidOrder(store, { topicIds: ['wealth'] });
     await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
     const view = await reportViewFor(store, o.orderId, o.accessToken);
     expect(view.sections.map((s) => s.id)).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly']);
-    const refs = view.sections.flatMap((s) => s.groups.flatMap((g) => g.sentences.flatMap((x) => x.refs)));
-    const firstSeen = [...new Set(refs)];
-    expect(firstSeen).toEqual(firstSeen.map((_, i) => i + 1));
-    expect(view.evidence.map((e) => e.n)).toEqual(firstSeen);
+    const refs = new Set(view.sections.flatMap((s) => s.groups.flatMap((g) => g.sentences.flatMap((x) => x.refs))));
+    expect(view.evidence.map((e) => e.n)).toEqual(view.evidence.map((_, i) => i + 1));
+    expect([...refs].sort((a, b) => a - b)).toEqual(view.evidence.map((e) => e.n));
     expect(view.sections.every((s) => s.groups.every((g) => g.sentences.every((x) => x.refs.length > 0)))).toBe(true);
   });
 
@@ -197,7 +199,7 @@ describe('무료 미리보기 응답', () => {
     expect(v.locked.map((l) => Object.keys(l).sort())).toEqual(Array(4).fill(['id', 'title']));
     expect(v.chart.daewoon).toEqual([]);
     expect(v.chart.seun).toEqual([]);
-    expect(Object.keys(v).sort()).toEqual(['basis', 'chart', 'cover', 'evidence', 'kind', 'locked', 'summary']);
+    expect(Object.keys(v).sort()).toEqual(['basis', 'chart', 'child', 'cover', 'evidence', 'kind', 'locked', 'summary']);
     expect(v.summary.length).toBeGreaterThan(0);
     expect(v.summary.every((s) => s.refs.length > 0)).toBe(true);
   });

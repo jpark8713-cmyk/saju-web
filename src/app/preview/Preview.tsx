@@ -3,7 +3,7 @@
 // 아래에 풀이 주제·받는 방법·이메일을 고르고 "다음"에서 주문을 만든다(POST /api/orders, 금액은 서버가 다시 계산).
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { priceFor } from '../../config/prices';
+import { PRICES, priceFor } from '../../config/prices';
 import { enabledTopics } from '../../config/topics';
 import { ReportDocument } from '../../components/ReportDocument';
 import type { PreviewView } from '../../report/view';
@@ -14,7 +14,9 @@ const won = (n: number) => `${n.toLocaleString('ko-KR')}원`;
 
 type OrderErrors = Partial<Record<string, string>>;
 
-function OrderBox({ choices, setChoices, onNext, busy, errors }: {
+function OrderBox({ choices, setChoices, onNext, busy, errors, child }: {
+  /** 아이 사주면 아이용 주제 이름(D-046) */
+  child: boolean;
   choices: Choices;
   setChoices: (c: Choices) => void;
   onNext: () => void;
@@ -22,7 +24,7 @@ function OrderBox({ choices, setChoices, onNext, busy, errors }: {
   errors: OrderErrors;
 }) {
   const topics = enabledTopics();
-  const price = useMemo(() => priceFor(choices.topicIds), [choices.topicIds]);
+  const price = useMemo(() => priceFor(choices.topicIds, PRICES, { child }), [choices.topicIds, child]);
   const wantsEmail = choices.deliveryMethods.includes('email');
   const emailOk = !wantsEmail || EMAIL_RE.test(choices.email.trim());
   const canNext = choices.deliveryMethods.length > 0 && emailOk && !busy;
@@ -40,7 +42,7 @@ function OrderBox({ choices, setChoices, onNext, busy, errors }: {
           <label key={t.id} className="check">
             <input type="checkbox" checked={choices.topicIds.includes(t.id)} data-testid={`topic-${t.id}`}
               onChange={(e) => setChoices({ ...choices, topicIds: toggle(choices.topicIds, t.id, e.target.checked) })} />
-            <span style={{ flex: 1 }}>{t.label}</span>
+            <span style={{ flex: 1 }}>{child ? t.childLabel : t.label}</span>
             <span>+{won(priceFor([t.id]).topics[0]?.price ?? 0)}</span>
           </label>
         ))}
@@ -152,7 +154,7 @@ export function Preview() {
     <ReportDocument
       view={view}
       mode="screen"
-      afterPreview={<OrderBox choices={choices} setChoices={setChoices} onNext={() => void next()} busy={busy} errors={errors} />}
+      afterPreview={<OrderBox child={view.child} choices={choices} setChoices={setChoices} onNext={() => void next()} busy={busy} errors={errors} />}
     />
   );
 }

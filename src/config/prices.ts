@@ -27,10 +27,11 @@ export interface PriceBreakdown {
 }
 
 /** 서버와 화면이 같은 계산을 쓴다. 금액은 클라이언트가 보낸 값을 믿지 않고 항상 이 함수로 다시 계산한다 */
-export function priceFor(topicIds: readonly string[], table: PriceTable = PRICES): PriceBreakdown {
+export function priceFor(topicIds: readonly string[], table: PriceTable = PRICES, opts: { child?: boolean } = {}): PriceBreakdown {
+  // 아이 사주(만 13세 미만)는 주제 이름만 아이용으로 보여 준다. 값·가격은 같다(D-046)
   const topics = enabledTopics()
     .filter((t) => topicIds.includes(t.id))
-    .map((t) => ({ id: t.id, label: t.label, price: table.topicOverrides[t.id] ?? table.perTopic }));
+    .map((t) => ({ id: t.id, label: opts.child ? t.childLabel : t.label, price: table.topicOverrides[t.id] ?? table.perTopic }));
   const allSelected = topics.length > 0 && topics.length === enabledTopics().length;
   const discount = allSelected ? table.allTopicsDiscount : 0;
   const total = table.base + topics.reduce((s, t) => s + t.price, 0) - discount;

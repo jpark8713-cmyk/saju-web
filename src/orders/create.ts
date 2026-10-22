@@ -1,12 +1,15 @@
 // 주문 생성 (POST /api/orders). 금액은 서버가 가격표로 계산하고, 클라이언트가 보낸 금액은 무시한다(SPEC 5장).
 import { z } from 'zod';
 import { defaultPaymentMethod, findPaymentMethod } from '../config/paymentMethods';
-import { priceFor, type PriceBreakdown } from '../config/prices';
+import { PRICES, priceFor, type PriceBreakdown } from '../config/prices';
+import type { SajuChart } from '../engine/types';
+import { isChildChart } from '../report/audience';
 import { findTopic } from '../config/topics';
 import { buildChart } from '../engine/chart';
 import { CalendarInputError } from '../engine/calendar';
 import type { Store, DeliveryMethod, Order } from '../store/types';
-import { engineErrorToField, validateBirthForm, type FieldErrors } from '../web/birthForm';
+import { engineErrorToField, type FieldErrors } from '../web/birthForm';
+import { validateBirthFormOnServer } from '../web/birthServer';
 import { birthLabelOf } from '../report/view';
 import { hashToken, newAccessToken, newOrderId } from './ids';
 import { EMPTY_PAYMENT } from './paymentState';
@@ -62,20 +65,22 @@ function validateChoices(b: z.infer<typeof bodySchema>): { errors: OrderErrors; 
 export async function createOrder(store: Store, raw: unknown, now = new Date()): Promise<CreatedOrder> {
   const body = bodySchema.safeParse(raw);
   if (!body.success) throw new OrderInputError({ form: '주문 정보 형식이 올바르지 않습니다.' });
-  const birth = validateBirthForm(body.data.birth);
+  const birth = validateBirthFormOnServer(body.data.birth);
   const choice = validateChoices(body.data);
   const errors: OrderErrors = { ...(birth.ok ? {} : birth.errors), ...choice.errors };
   if (!birth.ok || Object.keys(errors).length) throw new OrderInputError(errors);
 
   const referenceYear = new Date(now.getTime() + 9 * 3_600_000).getUTCFullYear();
+  let chart: SajuChart;
   try {
-    buildChart(birth.value.input, { referenceYear }); // 존재하지 않는 음력 날짜·윤달 등 엔진 검증
+    chart = buildChart(birth.value.input, { referenceYear }); // 존재하지 않는 음력 날짜·윤달 등 엔진 검증
   } catch (e) {
-    if (e instanceof CalendarInputError) throw new OrderInputError(engineErrorToField(e.code));
+    if (e instanceof CalendarInputError) throw new OrderInputError(engineErrorToField(e.code, birth.value.input));
     throw e;
   }
 
-  const breakdown = priceFor(body.data.topicIds);
+  // 아이 사주면 결제 화면·주문 내역의 주제 이름도 아이용으로 보여 준다(리포트 생성과 같은 기준 시각, D-046)
+  const breakdown = priceFor(body.data.topicIds, PRICES, { child: isChildChart(chart, now) });
   const accessToken = newAccessToken();
   const order: Order = {
     id: newOrderId(now),
@@ -91,7 +96,7 @@ export async function createOrder(store: Store, raw: unknown, now = new Date()):
     referenceYear,
     createdAt: now.toISOString(),
     paidAt: null,
-    pendingBirth: { input: birth.value.input, name: birth.value.name, label: birthLabelOf(birth.value.input) },
+    pendingBirth: { input: birth.value.input, name: birth.value.name, label: birthLabelOf(birth.value.input, birth.value.timeText) },
     generation: { runs: 0, startedAt: null, finishedAt: null, lastFailure: null },
     devForceGenerationFailure: false,
   };

@@ -4,27 +4,32 @@
 import { CalendarInputError } from '../engine/calendar';
 import { buildChart } from '../engine/chart';
 import { buildEvidence } from '../engine/evidence';
+import { isChildChart } from '../report/audience';
 import { summaryTemplate } from '../report/summaryTemplate';
 import { birthLabelOf, buildPreviewView, type PreviewView } from '../report/view';
-import { engineErrorToField, validateBirthForm, type FieldErrors } from './birthForm';
+import { engineErrorToField, type FieldErrors } from './birthForm';
+import { validateBirthFormOnServer } from './birthServer';
 
 export function buildPreview(raw: unknown, now = new Date()): { ok: true; view: PreviewView } | { ok: false; errors: FieldErrors } {
-  const v = validateBirthForm(raw);
+  const v = validateBirthFormOnServer(raw);
   if (!v.ok) return v;
   const referenceYear = new Date(now.getTime() + 9 * 3_600_000).getUTCFullYear();
   try {
     const chart = buildChart(v.value.input, { referenceYear });
-    const evidence = buildEvidence(chart);
+    // 결제 후 리포트와 같은 기준(만 13세 미만이면 아이 리포트 문장·사실 카드·근거 문구)으로 만든다(D-044·D-045·D-051)
+    const child = isChildChart(chart, now);
+    const evidence = buildEvidence(chart, { child });
     const view = buildPreviewView({
       chart,
       evidence,
-      summary: summaryTemplate(chart),
+      summary: summaryTemplate(chart, { child }),
+      child,
       name: v.value.name,
-      birthLabel: birthLabelOf(v.value.input),
+      birthLabel: birthLabelOf(v.value.input, v.value.timeText),
     });
     return { ok: true, view: { ...view, chart: { ...view.chart, daewoon: [], seun: [] } } };
   } catch (e) {
-    if (e instanceof CalendarInputError) return { ok: false, errors: engineErrorToField(e.code) };
+    if (e instanceof CalendarInputError) return { ok: false, errors: engineErrorToField(e.code, v.value.input) };
     throw e;
   }
 }
