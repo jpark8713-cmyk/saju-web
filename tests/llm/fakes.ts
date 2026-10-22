@@ -3,6 +3,9 @@ import { REPORT_LAYOUT } from '../../src/config/report';
 import { ModerationUnavailable, type ModerationItem, type ModerationResult, type Moderator } from '../../src/llm/moderation';
 import type { LlmRequest, LlmResponse, LlmTransport } from '../../src/llm/transport';
 import type { BaseDraft, ReportSentence, TopicDraft } from '../../src/llm/types';
+import { TEN_GOD_GROUPS } from '../../src/engine/constants';
+import { tenGodOfStem } from '../../src/engine/tenGods';
+import type { SajuChart } from '../../src/engine/types';
 
 export type Responder = (req: LlmRequest, call: number) => Partial<LlmResponse> & { body?: unknown };
 
@@ -48,7 +51,30 @@ function sentences(n: number, ids: string[]): ReportSentence[] {
   }));
 }
 
-export function validBase(daewoonIndices: number[], ids: string[]): BaseDraft {
+const GROUP_PLAIN: Record<string, string> = { 비겁: '자립·경쟁', 식상: '표현·재능', 재성: '재물·활동', 관성: '규칙·책임', 인성: '배움·보살핌' };
+
+/** 사용자 메시지의 세운 근거에서 그해 윗글자의 뜻 묶음(쉬운 이름)을 읽는다(D-048) */
+export function seunGroupIn(user: string, i: number): string | null {
+  const json = user.slice(user.indexOf('['), user.indexOf('\n## 작성할 칸') - 1);
+  const row = (JSON.parse(json) as { id: string; content: string }[]).find((e) => e.id === `seun[${i}]`);
+  const ko = row ? /\((비겁|식상|재성|관성|인성)\)/u.exec(row.content)?.[1] : undefined;
+  return ko ? GROUP_PLAIN[ko]! : null;
+}
+
+/** 차트에서 올해·내년 윗글자의 뜻 묶음(쉬운 이름)을 구한다(seunGroupIn과 같은 값) */
+export function yearGroupsOf(chart: SajuChart): [string, string] {
+  const label = (stem: number) => TEN_GOD_GROUPS.find((g) => (g.members as readonly string[]).includes(tenGodOfStem(chart.pillars.day.stem, stem)))!.plain;
+  return [label(chart.seun[0]!.pillar.stem), label(chart.seun[1]!.pillar.stem)];
+}
+
+/** 올해·내년 첫·마지막 문장은 그해 글자의 뜻 묶음을 쓴다(D-048) */
+function yearly(n: number, seun: string, group: string | null): ReportSentence[] {
+  return sentences(n, [seun]).map((s, i) =>
+    group && (i === 0 || i === n - 1) ? { ...s, text: `그해 글자가 ${group}의 뜻이라 바탕으로 쓴 ${i + 1}번째 문장이에요.` } : s,
+  );
+}
+
+export function validBase(daewoonIndices: number[], ids: string[], groups: readonly (string | null)[] = [null, null]): BaseDraft {
   const L = REPORT_LAYOUT;
   return {
     summary: sentences(L.summaryAiSentences, ids),
@@ -58,8 +84,8 @@ export function validBase(daewoonIndices: number[], ids: string[]): BaseDraft {
       sentences: sentences(L.daewoonNoteSentences, [`daewoon[${d}]`]),
     })),
     yearly: {
-      thisYear: sentences(L.yearlySentences, ['seun[0]']),
-      nextYear: sentences(L.yearlySentences, ['seun[1]']),
+      thisYear: yearly(L.yearlySentences, 'seun[0]', groups[0] ?? null),
+      nextYear: yearly(L.yearlySentences, 'seun[1]', groups[1] ?? null),
     },
   };
 }
@@ -72,7 +98,7 @@ export function validTopic(ids: string[]): TopicDraft {
 export function validResponder(daewoonIndices: number[]): Responder {
   return (req) => {
     const ids = evidenceIdsIn(req.user).filter((id) => id === 'dayMaster' || id.startsWith('elements.') || id.startsWith('tenGodGroup.'));
-    return { body: req.label === 'base' ? validBase(daewoonIndices, ids) : validTopic(ids) };
+    return { body: req.label === 'base' ? validBase(daewoonIndices, ids, [seunGroupIn(req.user, 0), seunGroupIn(req.user, 1)]) : validTopic(ids) };
   };
 }
 

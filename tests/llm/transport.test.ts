@@ -82,3 +82,22 @@ describe('costUsd', () => {
     expect(costUsd({ model: 'unknown-model', ...u })).toBeNull();
   });
 });
+
+describe('요청 시간 제한·재시도 (D-046)', () => {
+  const response = { model: 'claude-sonnet-5-5', stop_reason: 'end_turn', content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1, output_tokens: 1 } };
+  const withOpts = () => {
+    const opts: unknown[] = [];
+    const client = { beta: { messages: { create: async (_p: unknown, o: unknown) => (opts.push(o), response) } } } as unknown as MessagesClient;
+    return { client, opts };
+  };
+  it('생성 호출은 90초, 재시도 1번', async () => {
+    const { client, opts } = withOpts();
+    await new AnthropicTransport('claude-sonnet-5-5', client).complete(req);
+    expect(opts[0]).toMatchObject({ timeout: 90_000, maxRetries: 1 });
+  });
+  it('검수 호출처럼 시간 제한을 주면 그 값을 쓴다', async () => {
+    const { client, opts } = withOpts();
+    await new AnthropicTransport('claude-haiku-5-5', client, { fallback: false, timeoutMs: 30_000 }).complete(req);
+    expect(opts[0]).toMatchObject({ timeout: 30_000, maxRetries: 1 });
+  });
+});

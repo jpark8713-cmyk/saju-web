@@ -67,6 +67,8 @@ export interface TransportOptions {
   fallback?: boolean;
   effort?: 'low' | 'medium' | 'high';
   maxTokens?: number;
+  /** 요청 한 번의 시간 제한(ms). SDK 기본(10분) 대신 쓴다(D-046) */
+  timeoutMs?: number;
 }
 
 export class AnthropicTransport implements LlmTransport {
@@ -84,6 +86,7 @@ export class AnthropicTransport implements LlmTransport {
       fallback: options.fallback ?? true,
       effort: options.effort ?? GENERATION.effort,
       maxTokens: options.maxTokens ?? GENERATION.maxTokens,
+      timeoutMs: options.timeoutMs ?? 90_000,
     };
   }
 
@@ -96,7 +99,8 @@ export class AnthropicTransport implements LlmTransport {
       output_config: { effort: this.options.effort, format: { type: 'json_schema', schema: req.jsonSchema } },
       system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: req.user }],
-    }, { signal });
+      // 시간 제한은 요청 한 번마다 걸리고 SDK가 다시 시도한다. 재시도를 1번으로 줄여 최악 대기를 약 3분으로 둔다(D-046 리뷰)
+    }, { signal, timeout: this.options.timeoutMs, maxRetries: 1 });
     const text = msg.content
       .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === 'text')
       .map((b) => b.text)

@@ -45,7 +45,7 @@ function Progress({ stage, orderId, email }: { stage: Stage; orderId: string; em
         ))}
       </ol>
       <p className="meta" style={{ margin: 0 }}>
-        보통 20~30초 걸려요. 이 화면을 닫아도 풀이는 계속 만들어져요.
+        보통 1분 안쪽, 길면 2분쯤 걸려요. 이 화면을 닫아도 풀이는 계속 만들어져요.
         {email ? ' 완료되면 입력하신 이메일로 링크를 보내 드려요.' : ''}
       </p>
       <div className="box">

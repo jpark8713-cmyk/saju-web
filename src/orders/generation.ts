@@ -2,10 +2,12 @@
 // 생성은 백그라운드로 돌고 화면 6이 상태를 조회한다. 성공하면 출생 정보를 지우고 발급 기록을 만든다(SPEC 1장·Phase 4).
 // 서버가 생성 도중 멈춰 "생성 중"에 오래 머문 주문은 실패로 바꿔 재시도나 환불로 이어지게 한다(D-027, D-028).
 import { MAX_GENERATION_RUNS, STALE_GENERATION_MS } from '../config/generation';
+import { GENERATION } from '../config/report';
 import { expiryFrom } from '../delivery/deliver';
 import { deliveryOf, withDelivery } from '../delivery/state';
 import { buildChart } from '../engine/chart';
 import { buildEvidence } from '../engine/evidence';
+import { isChildChart } from '../report/audience';
 import { GenerationError, generateReport } from '../llm/generate';
 import type { LlmRuntime } from '../llm/runtime';
 import { IssuanceImmutable, type Order, type Store } from '../store/types';
@@ -99,11 +101,21 @@ async function run(store: Store, order: Order, runtime: LlmRuntime, onDone?: OnD
   try {
     if (!birth) throw new Error('출생 정보가 없습니다');
     const chart = buildChart(birth.input, { referenceYear: order.referenceYear });
-    const evidence = buildEvidence(chart);
+    // 아이 리포트는 근거 문구도 아이 호칭으로 저장한다(사실 카드 "자세히"에 보인다, D-051)
+    const evidence = buildEvidence(chart, { child: isChildChart(chart, new Date(order.createdAt)) });
     const result = await generateReport({
       chart, evidence, topicIds: order.topicIds, referenceYear: order.referenceYear,
       transport: runtime.transport, moderator: runtime.moderator,
+      // 아이 리포트 판정(만 나이)은 주문 시각 기준이다. 미리보기도 같은 시점에 보였다(D-044)
+      asOf: new Date(order.createdAt),
     });
+    // D-050: 검증·검수를 끝내 통과하지 못했거나 시간 상한에 닿아 사실 문장으로 바꾼 문장 수를 남긴다(문장 원문은 남기지 않는다)
+    const replaced = result.body.templatedSentences ?? 0;
+    if (replaced > GENERATION.templateAlertSentences) {
+      console.warn(`[생성 알림] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개(기준 ${GENERATION.templateAlertSentences}개 초과, 칸: ${result.body.templated?.join(', ')})`);
+    } else if (replaced > 0) {
+      console.info(`[생성] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개(칸: ${result.body.templated?.join(', ')})`);
+    }
     const generatedAt = new Date().toISOString();
     const content = { chart, evidence, body: result.body };
     // 리포트 저장과 완성 표시(보관 기간)는 한 번에 한다. 이 실행이 더는 현재 실행이 아니면 둘 다 하지 않는다(D-036)

@@ -18,6 +18,18 @@ function sentences(n: number, ids: readonly string[], prefix: string) {
   }));
 }
 
+const GROUP_PLAIN: Record<string, string> = { 비겁: '자립·경쟁', 식상: '표현·재능', 재성: '재물·활동', 관성: '규칙·책임', 인성: '배움·보살핌' };
+
+/** 올해·내년 첫·마지막 문장은 세운 근거에 적힌 그해 글자의 뜻 묶음을 쓴다(D-048) */
+function yearly(user: string, i: number, prefix: string) {
+  const start = user.indexOf('[');
+  const end = user.indexOf('\n\n## 작성할 칸');
+  const rows = start < 0 || end < 0 ? [] : (JSON.parse(user.slice(start, end)) as { id: string; content: string }[]);
+  const ko = /\((비겁|식상|재성|관성|인성)\)/u.exec(rows.find((e) => e.id === `seun[${i}]`)?.content ?? '')?.[1];
+  const xs = sentences(REPORT_LAYOUT.yearlySentences, [`seun[${i}]`], prefix);
+  return xs.map((s, k) => (ko && (k === 0 || k === xs.length - 1) ? { ...s, text: `${prefix} 글자의 뜻은 ${GROUP_PLAIN[ko]}이에요(개발용 가짜 문장).` } : s));
+}
+
 function baseDraft(user: string) {
   const ids = evidenceIds(user);
   const general = ids.filter((id) => /^(tenGodGroup|tenGod|pillar|relation)\./.test(id) || id.startsWith('elements.'));
@@ -26,11 +38,8 @@ function baseDraft(user: string) {
   return {
     summary: sentences(L.summaryAiSentences, general, '총평'),
     traits: sentences(L.traitsSentences, general, '성향'),
-    daewoonNotes: indices.map((d) => ({ daewoonIndex: d, sentences: sentences(L.daewoonNoteSentences, [`daewoon[${d}]`], '대운') })),
-    yearly: {
-      thisYear: sentences(L.yearlySentences, ['seun[0]'], '올해'),
-      nextYear: sentences(L.yearlySentences, ['seun[1]'], '내년'),
-    },
+    daewoonNotes: indices.map((d) => ({ daewoonIndex: d, sentences: sentences(L.daewoonNoteSentences, [`daewoon[${d}]`], '큰 흐름') })),
+    yearly: { thisYear: yearly(user, 0, '올해'), nextYear: yearly(user, 1, '내년') },
   };
 }
 
@@ -41,12 +50,15 @@ function topicDraft(user: string) {
 
 export class DevFakeTransport implements LlmTransport {
   readonly model = 'dev-fake';
-  /** fail이면 항상 형식이 틀린 응답을 돌려줘 생성 실패(화면 B)를 재현한다 */
+  /**
+   * fail이면 API 오류를 내 생성 실패(화면 B)를 재현한다.
+   * D-050부터 검증을 끝내 통과하지 못한 칸은 사실 문장으로 바꿔 주문이 끝나므로, 형식이 틀린 응답으로는 실패가 재현되지 않는다
+   */
   constructor(private readonly mode: 'ok' | 'fail' = 'ok') {}
 
   async complete(req: LlmRequest): Promise<LlmResponse> {
     const usage = [{ model: this.model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }];
-    if (this.mode === 'fail') return { text: '{"broken": true}', stopReason: 'end_turn', servedModel: this.model, usage };
+    if (this.mode === 'fail') throw new Error('개발용 생성 실패(화면 B 재현)');
     const body = req.label === 'base' ? baseDraft(req.user) : topicDraft(req.user);
     return { text: JSON.stringify(body), stopReason: 'end_turn', servedModel: this.model, usage };
   }

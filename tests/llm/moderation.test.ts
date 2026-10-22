@@ -7,12 +7,14 @@ import { targetDaewoonIndices } from '../../src/llm/evidenceSelect';
 import { GenerationError, generateReport } from '../../src/llm/generate';
 import { LlmModerator, MODERATION_MAX_ATTEMPTS, ModerationUnavailable } from '../../src/llm/moderation';
 import { SAMPLE_INPUTS, SAMPLE_REFERENCE_YEAR } from '../../src/llm/samples';
+import { fallbackBase } from '../../src/llm/fallbackText';
 import { summaryTemplate } from '../../src/report/summaryTemplate';
-import { FakeModerator, FakeTransport, validBase, validResponder, validTopic } from './fakes';
+import { FakeModerator, FakeTransport, validBase, validResponder, validTopic, yearGroupsOf } from './fakes';
 
 const chart = buildChart(SAMPLE_INPUTS[0]!, { referenceYear: SAMPLE_REFERENCE_YEAR });
 const evidence = buildEvidence(chart);
 const indices = targetDaewoonIndices(chart, SAMPLE_REFERENCE_YEAR, REPORT_LAYOUT.daewoonNoteCount);
+const groups = yearGroupsOf(chart);
 const run = (t: FakeTransport, m: FakeModerator, topicIds: string[] = ['wealth']) =>
   generateReport({ chart, evidence, topicIds, referenceYear: SAMPLE_REFERENCE_YEAR, transport: t, moderator: m });
 const okReview = () => ({ flags: [], calls: [{ attempt: 1, ok: true, usage: [] }] });
@@ -33,7 +35,7 @@ describe('generateReport + AI 검수', () => {
     let n = 0;
     const t = new FakeTransport((req) =>
       req.label === 'base'
-        ? { body: validBase(indices, ['dayMaster']) }
+        ? { body: validBase(indices, ['dayMaster'], groups) }
         : {
             body: n++ === 0
               ? { sentences: [{ text: '주식에 투자하세요.', evidenceIds: ['dayMaster'] }] }
@@ -84,14 +86,19 @@ describe('generateReport + AI 검수', () => {
     expect(rec.moderation?.calls.every((c) => !c.ok)).toBe(true);
   });
 
-  it('3회 모두 검수에 걸리면 검증 실패로 끝난다', async () => {
+  it('D-050: 3회 모두 검수에 걸리면 걸린 문장만 코드 사실 문장으로 바꾸고 주문은 끝난다', async () => {
     const m = new FakeModerator((items) => ({
       flags: [{ path: items[0]!.path, categories: ['medical'] }],
       calls: [{ attempt: 1, ok: true, usage: [] }],
     }));
-    const err = (await run(new FakeTransport(validResponder(indices)), m, []).catch((e: unknown) => e)) as GenerationError;
-    expect(err.reason).toBe('validation');
-    expect(err.attempts.filter((a) => a.label === 'base')).toHaveLength(3);
+    const r = await run(new FakeTransport(validResponder(indices)), m, []);
+    const base = r.attempts.filter((a) => a.label === 'base');
+    expect(base.filter((a) => a.stopReason !== 'templatePatched')).toHaveLength(3);
+    expect(base.at(-1)).toMatchObject({ stopReason: 'templatePatched', replacedSentences: 1 });
+    expect(r.body.templatedSentences).toBe(1);
+    // 첫 AI 문장(총평 이어 쓰기 첫 문장)만 사실 문장이고, 나머지는 검수를 통과한 AI 문장이다
+    expect(r.body.summary[2]).toEqual(fallbackBase(chart, indices, { child: false }).summary[0]);
+    expect(r.body.traits[0]!.text).toContain('근거를 바탕으로 쓴');
   });
 });
 
