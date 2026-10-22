@@ -12,6 +12,7 @@ export function Calculating() {
   const router = useRouter();
   const [slow, setSlow] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [offline, setOffline] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
 
   const run = useCallback(async () => {
@@ -25,6 +26,7 @@ export function Calculating() {
     inFlight.current = ctrl;
     setSlow(false);
     setFailed(false);
+    setOffline(false);
     const timer = setTimeout(() => setSlow(true), SLOW_AFTER_MS);
     try {
       const res = await fetch('/api/chart', {
@@ -33,7 +35,8 @@ export function Calculating() {
         body: JSON.stringify({ birth }),
         signal: ctrl.signal,
       });
-      const data = (await res.json()) as { preview?: PreviewView; errors?: FieldErrors };
+      // 서버 오류 페이지(HTML)면 JSON이 아니다
+      const data = ((await res.json().catch(() => ({}))) as { preview?: PreviewView; errors?: FieldErrors });
       if (res.ok && data.preview) {
         save('saju.preview', data.preview);
         router.replace('/preview');
@@ -45,7 +48,11 @@ export function Calculating() {
         setFailed(true);
       }
     } catch {
-      if (!ctrl.signal.aborted) setFailed(true);
+      // 연결이 끊긴 경우(응답을 못 받음)
+      if (!ctrl.signal.aborted) {
+        setOffline(true);
+        setFailed(true);
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -62,7 +69,20 @@ export function Calculating() {
       {!failed && <p className="meta">절입 시각과 태어난 지역의 시차를 반영해 네 기둥을 세우는 중이에요. 몇 초면 끝나요.</p>}
       {(slow || failed) && (
         <div className="box section" data-testid="calc-retry">
-          <p style={{ margin: 0 }}>{failed ? '계산 중에 문제가 생겼어요.' : '평소보다 오래 걸리고 있어요.'} 다시 시도해 주세요.</p>
+          {failed ? (
+            <>
+              <p style={{ margin: 0 }} data-testid="calc-failed">
+                {offline
+                  ? '서버에 연결하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.'
+                  : '서버에서 계산하지 못했어요. 입력값에 고칠 곳이 있으면 입력 화면의 해당 칸 아래에 알려 드리는데, 이번에는 그런 안내가 없어서 서버의 일시적인 문제일 가능성이 커요. 다시 시도해 주세요.'}
+              </p>
+              <p className="hint" style={{ margin: 0 }}>
+                계속 같은 오류가 나면 입력 화면으로 돌아가 생년월일(양력·음력, 윤달), 태어난 시간, 태어난 지역이 맞는지 확인해 주세요.
+              </p>
+            </>
+          ) : (
+            <p style={{ margin: 0 }}>평소보다 오래 걸리고 있어요. 다시 시도해 주세요.</p>
+          )}
           <button type="button" className="button" onClick={() => void run()}>
             다시 시도
           </button>

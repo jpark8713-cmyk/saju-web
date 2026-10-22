@@ -1,5 +1,6 @@
 // 입력 → SajuChart. 엔진의 진입점.
-import { CalendarInputError, toLunar, toSolar, type SolarDate } from './calendar';
+import { CalendarInputError, resolveSolarDate, toLunar, type SolarDate } from './calendar';
+import { minuteSegments } from './minute';
 import { computeDaewoon, computeDaewoonStart, computeSeun } from './daewoon';
 import { computeElements } from './elements';
 import { buildNotices } from './notices';
@@ -26,18 +27,15 @@ function validateInput(input: SajuInput): void {
   if (input.time !== null && !isValidClock(input.time)) {
     throw new CalendarInputError('invalidInput', '태어난 시각 형식이 올바르지 않습니다');
   }
+  if (input.hourOnly !== undefined && (input.time !== null || !isValidClock({ hour: input.hourOnly, minute: 0 }))) {
+    throw new CalendarInputError('invalidInput', '분 모름 시각 형식이 올바르지 않습니다');
+  }
   const lon = input.birthplaceLongitude;
   if (lon !== undefined && (!Number.isFinite(lon) || lon < LONGITUDE_RANGE.min || lon > LONGITUDE_RANGE.max)) {
     throw new CalendarInputError('invalidInput', `출생지 경도는 동경 ${LONGITUDE_RANGE.min}~${LONGITUDE_RANGE.max}도 범위여야 합니다`);
   }
 }
 
-function resolveSolarDate(input: SajuInput): SolarDate {
-  const date = { year: input.year, month: input.month, day: input.day };
-  if (input.calendar === 'lunar') return toSolar({ ...date, isLeapMonth: input.isLeapMonth });
-  toLunar(date); // 범위·유효성 검사
-  return date;
-}
 
 /** 그날(한국 벽시계 00:00~24:00) 안의 절입. 시간 모름이면 년·월주가 바뀔 수 있다 */
 function jieOnDay(d: SolarDate, historicalTimezone: boolean): JieInstant | null {
@@ -55,17 +53,24 @@ export function buildChart(input: SajuInput, options: ChartOptions): SajuChart {
   const solarDate = resolveSolarDate(input);
   const lunarDate = toLunar(solarDate);
   const hasTime = input.time !== null;
-  const clock = input.time ?? settings.unknownTimeAssumption;
+  // 분을 몰라 경계 전후를 정하지 못했으면(D-039) 그 시의 0분으로 년·월·일주와 대운을 계산하고 시주는 비운다
+  const hourOnly = input.time === null ? input.hourOnly : undefined;
+  const clock = input.time ?? (hourOnly !== undefined ? { hour: hourOnly, minute: 0 } : settings.unknownTimeAssumption);
   const longitudeUsed = input.birthplaceLongitude ?? settings.defaultLongitude;
   const time = resolveBirthTime({ ...solarDate, ...clock }, settings, longitudeUsed);
 
-  const pillars = computePillars({ instantMs: time.instantMs, local: time.localSolarTime, hasTime, jasiMode: settings.jasiMode });
+  const segments = hourOnly !== undefined ? minuteSegments({ ...input, time: { hour: hourOnly, minute: 0 } }, settings) : [];
+  const computed = computePillars({ instantMs: time.instantMs, local: time.localSolarTime, hasTime, jasiMode: settings.jasiMode });
+  // 분 모름: 일주도 0분 구간의 값으로 맞춘다(통자시에서 23시대는 시를 알아야 다음 날 일주가 되므로 시주 없는 계산과 갈린다)
+  const pillars = segments[0] ? { ...computed, day: segments[0].pillars.day } : computed;
   const daewoonStart = computeDaewoonStart(time.instantMs, pillars.year.stem, input.gender, settings.daewoonRounding);
   const daewoon = computeDaewoon(pillars.month, daewoonStart, { ...solarDate, ...clock }, settings.daewoonCount);
 
-  const dayJie = hasTime ? null : jieOnDay(solarDate, settings.historicalTimezone);
+  // 시를 알면 그날 다른 시각의 절입은 상관없다(그 시 안의 절입은 분 구간이 잡는다)
+  const dayJie = hasTime || hourOnly !== undefined ? null : jieOnDay(solarDate, settings.historicalTimezone);
   const warnings: ChartWarning[] = [
     ...(dayJie ? (['unknownTimeOnJieDay'] as const) : []),
+    ...(segments.length > 1 ? (['unknownMinuteOnBoundary'] as const) : []),
     ...(time.nonexistentWallTime ? (['nonexistentWallTime'] as const) : []),
     ...(time.ambiguousWallTime ? (['ambiguousWallTime'] as const) : []),
   ];
@@ -84,6 +89,6 @@ export function buildChart(input: SajuInput, options: ChartOptions): SajuChart {
     settings: { ...settings, longitudeUsed },
     time,
     warnings,
-    notices: buildNotices(warnings, dayJie, settings.historicalTimezone),
+    notices: buildNotices(warnings, dayJie, settings.historicalTimezone, hourOnly !== undefined ? { hour: hourOnly, segments } : null),
   };
 }

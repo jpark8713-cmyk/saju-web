@@ -16,6 +16,9 @@ export const DEFAULT_SETTINGS: Readonly<CalcSettings> = Object.freeze({
 /** 지원 범위 (주 라이브러리의 한국 음력 데이터 범위) */
 export const SUPPORTED_RANGE = Object.freeze({ minYear: 1900, maxYear: 2050 });
 
+/** 지원 범위 끝(양력 2050-12-31)의 음력 날짜. 안내 문구에 쓰고, 테스트가 엔진 변환과 맞는지 확인한다 */
+export const LUNAR_SUPPORTED_END = Object.freeze({ year: 2050, month: 11, day: 18 });
+
 /** 경도 허용 범위 (동경, 도) */
 export const LONGITUDE_RANGE = Object.freeze({ min: 120, max: 135 });
 

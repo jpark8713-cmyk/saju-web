@@ -8,6 +8,8 @@ export const NOTICE_MESSAGES: Readonly<Record<ChartWarning, string>> = Object.fr
   unknownTimeOnJieDay:
     '태어난 날에 절기가 바뀌는 시각이 있어요. 태어난 시간을 모르면 월주(입춘이면 년주도)가 달라질 수 있어요. ' +
     '정오 출생으로 계산했고, 절기 시각 전후의 결과를 함께 보여 드려요.',
+  unknownMinuteOnBoundary:
+    '태어난 시의 몇 분이었는지에 따라 시주가 달라지는데, 분을 모르셔서 시주 없이 풀었어요. 분에 따라 달라지는 기둥을 함께 보여 드려요.',
   nonexistentWallTime:
     '입력하신 시각은 서머타임이 시작되면서 시계에 없었던 시각이에요. 표준시 기준으로 계산했어요.',
   ambiguousWallTime:
@@ -34,9 +36,11 @@ export function buildNotices(
   warnings: readonly ChartWarning[],
   jieOnDay: JieInstant | null,
   historicalTimezone: boolean,
+  minute: ChartNotice['minute'] | null = null,
 ): ChartNotice[] {
   return warnings.map((code): ChartNotice => {
     const base = { code, message: NOTICE_MESSAGES[code] };
+    if (code === 'unknownMinuteOnBoundary') return minute ? { ...base, minute } : base;
     if (code !== 'unknownTimeOnJieDay' || !jieOnDay) return base;
     return {
       ...base,

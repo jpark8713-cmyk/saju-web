@@ -134,3 +134,11 @@ function fillLunarHole(d: LunarDate): SolarDate | null {
     return candidate;
   }
 }
+
+/** 입력 날짜(양력 또는 음력) → 양력 날짜. 범위·유효성을 함께 검사한다 */
+export function resolveSolarDate(input: { calendar: 'solar' | 'lunar'; isLeapMonth: boolean; year: number; month: number; day: number }): SolarDate {
+  const date = { year: input.year, month: input.month, day: input.day };
+  if (input.calendar === 'lunar') return toSolar({ ...date, isLeapMonth: input.isLeapMonth });
+  toLunar(date); // 범위·유효성 검사
+  return date;
+}

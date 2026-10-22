@@ -16,7 +16,7 @@ test('운영 클라이언트 번들에 목 결제 코드가 없다', async () =>
   const hits: string[] = [];
   for (const f of files) {
     const text = await readFile(f, 'utf8');
-    for (const needle of ['/api/dev/mock-pg', 'mock-pg-submit', 'success-genfail', '목 결제창', '/api/dev/outbox']) if (text.includes(needle)) hits.push(`${f}: ${needle}`);
+    for (const needle of ['/api/dev/mock-pg', 'mock-pg-submit', 'success-genfail', '목 결제창', '/api/dev/outbox', 'mock-pg-processed', '이미 처리된 결제']) if (text.includes(needle)) hits.push(`${f}: ${needle}`);
   }
   expect(hits).toEqual([]);
 });

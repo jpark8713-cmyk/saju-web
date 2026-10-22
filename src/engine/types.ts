@@ -36,6 +36,11 @@ export interface SajuInput {
   day: number;
   /** 시간 모름이면 null (3주 계산) */
   time: BirthTime | null;
+  /**
+   * 시는 아는데 분을 몰라, 그 시 안의 경계 전후도 모를 때의 시(0~23). time은 null이어야 한다(D-039).
+   * 시주는 비우고, 년·월·일주와 대운은 그 시의 0분으로 계산하며, 분에 따라 달라지는 결과를 안내(notice)로 함께 준다.
+   */
+  hourOnly?: number;
   gender: Gender;
   /** 출생지 경도(동경, 도). 비우면 설정의 기본 경도를 쓴다 */
   birthplaceLongitude?: number;
@@ -187,6 +192,7 @@ export interface SajuChart {
 
 export type ChartWarning =
   | 'unknownTimeOnJieDay' // 시간 모름 + 절입일 출생: 년·월주가 바뀔 수 있음
+  | 'unknownMinuteOnBoundary' // 시는 알지만 분을 몰라 경계 전후를 정하지 못함: 시주(때로 일주)가 바뀔 수 있음
   | 'nonexistentWallTime'
   | 'ambiguousWallTime';
 
@@ -201,6 +207,11 @@ export interface ChartNotice {
     localTime: string;
     ifBefore: { year: Pillar; month: Pillar };
     ifAfter: { year: Pillar; month: Pillar };
+  };
+  /** unknownMinuteOnBoundary일 때: 입력한 시와, 분 구간마다의 네 기둥 */
+  minute?: {
+    hour: number;
+    segments: { fromMinute: number; toMinute: number; pillars: PillarSet }[];
   };
 }
 
