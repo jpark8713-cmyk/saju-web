@@ -224,7 +224,11 @@ export type EvidenceKind =
   | 'relation'
   | 'daewoonDirection'
   | 'daewoon'
-  | 'seun';
+  | 'seun'
+  /** 월별 흐름의 한 달(D-052) */
+  | 'month'
+  /** 10년 흐름의 한 해(D-052) */
+  | 'year';
 
 export interface Evidence {
   id: string;

@@ -5,9 +5,10 @@ import {
   pillarKo, pillarLabel, stemLabel, stemYinYang,
 } from './constants';
 import { daewoonStartLabel } from './daewoon';
+import type { KstDate, MonthPeriod, YearPeriod } from './periods';
 import { luckRelations, type LuckRelation } from './relations';
 import { tenGodOfBranch, tenGodOfStem } from './tenGods';
-import type { ChartRef, Element, Evidence, Pillar, PillarPosition, Relation, SajuChart, TenGod } from './types';
+import type { ChartRef, DaewoonEntry, Element, Evidence, Pillar, PillarPosition, Relation, SajuChart, TenGod } from './types';
 
 const POSITIONS: PillarPosition[] = ['year', 'month', 'day', 'hour'];
 const YIN_YANG_KO = { yang: '양(陽)', yin: '음(陰)' } as const;
@@ -192,34 +193,107 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
 
 const LUCK_RELATION_KO: Record<LuckRelation['kind'], string> = { ...RELATION_KO, same: '같은 글자' };
 
+/** 그해·그달 간지의 두 글자가 일간에게 갖는 뜻(십신·묶음) */
+function luckMeaning(chart: SajuChart, p: Pillar): { text: string; tenGods: [TenGod, TenGod] } {
+  const day = chart.pillars.day.stem;
+  const tgs = tenGodOfStem(day, p.stem);
+  const tgb = tenGodOfBranch(day, p.branch);
+  return {
+    text: `일간 기준 천간 ${stemLabel(p.stem)}은(는) ${TEN_GOD_KO[tgs]}(${groupKoOf(tgs)}), 지지 ${branchLabel(p.branch)}은(는) ${TEN_GOD_KO[tgb]}(${groupKoOf(tgb)})`,
+    tenGods: [tgs, tgb],
+  };
+}
+
+/** 관계 하나의 근거 표기: "지지 오(午) ↔ 년주 지지 오(午): 같은 글자" */
+function luckRelationLabel(chart: SajuChart, p: Pillar, r: LuckRelation): string {
+  const own = r.luckPart === 'stem' ? `천간 ${stemLabel(p.stem)}` : `지지 ${branchLabel(p.branch)}`;
+  return `${own} ↔ ${refLabel(chart, r.ref).text}: ${LUCK_RELATION_KO[r.kind]}${r.resultElement ? `(${elementLabel(r.resultElement)})` : ''}`;
+}
+
+function luckRelationsText(chart: SajuChart, p: Pillar, rels: readonly LuckRelation[]): string {
+  return rels.length ? rels.map((r) => luckRelationLabel(chart, p, r)).join(', ') : '같은 글자·합·충 없음';
+}
+
+/** 그해·그달 근거의 표기: 간지 이름, 두 글자, 십신 이름, 관계를 맺는 원국 글자 */
+function luckTerms(chart: SajuChart, p: Pillar, tenGods: readonly TenGod[], rels: readonly LuckRelation[]): string[] {
+  return [
+    pillarKo(p), pillarHanja(p), STEMS_KO[p.stem]!, BRANCHES_KO[p.branch]!,
+    ...tenGods.map((t) => TEN_GOD_KO[t]),
+    ...new Set(rels.flatMap((r) => refLabel(chart, r.ref).terms)),
+  ];
+}
+
 /**
  * 세운 근거(D-048): 그해 간지의 오행에 더해, 그 글자가 일간에게 갖는 뜻(십신·묶음)과 원국 글자와의 관계(같은 글자·합·충)를 적는다.
  * 오행만 적으면 같은 해의 문장이 사주마다 거의 같아졌다(6차 측정).
  */
 function seunEvidence(chart: SajuChart): Evidence[] {
-  const day = chart.pillars.day.stem;
   return chart.seun.map((y, i): Evidence => {
-    const tgs = tenGodOfStem(day, y.pillar.stem);
-    const tgb = tenGodOfBranch(day, y.pillar.branch);
-    const meaning = `일간 기준 천간 ${stemLabel(y.pillar.stem)}은(는) ${TEN_GOD_KO[tgs]}(${groupKoOf(tgs)}), 지지 ${branchLabel(y.pillar.branch)}은(는) ${TEN_GOD_KO[tgb]}(${groupKoOf(tgb)})`;
+    const meaning = luckMeaning(chart, y.pillar);
     const rels = luckRelations(chart.pillars, y.pillar);
-    const relText = rels.length
-      ? rels.map((r) => {
-          const own = r.luckPart === 'stem' ? `천간 ${stemLabel(y.pillar.stem)}` : `지지 ${branchLabel(y.pillar.branch)}`;
-          return `${own} ↔ ${refLabel(chart, r.ref).text}: ${LUCK_RELATION_KO[r.kind]}${r.resultElement ? `(${elementLabel(r.resultElement)})` : ''}`;
-        }).join(', ')
-      : '같은 글자·합·충 없음';
     return {
       id: `seun[${i}]`,
       kind: 'seun',
-      content: `${y.year}년 세운은 ${pillarLabel(y.pillar)}: ${luckElements(y.pillar)}. ${meaning}. 원국과의 관계: ${relText}`,
+      content: `${y.year}년 세운은 ${pillarLabel(y.pillar)}: ${luckElements(y.pillar)}. ${meaning.text}. 원국과의 관계: ${luckRelationsText(chart, y.pillar, rels)}`,
       sourceFields: [`seun[${i}]`],
       chartRefs: [`seun[${i}]`, ...new Set(rels.map((r) => r.ref))],
-      terms: [
-        pillarKo(y.pillar), pillarHanja(y.pillar), STEMS_KO[y.pillar.stem]!, BRANCHES_KO[y.pillar.branch]!,
-        TEN_GOD_KO[tgs], TEN_GOD_KO[tgb],
-        ...new Set(rels.flatMap((r) => refLabel(chart, r.ref).terms)),
-      ],
+      terms: luckTerms(chart, y.pillar, meaning.tenGods, rels),
+    };
+  });
+}
+
+const md = (d: KstDate) => `${d.month}/${d.day}`;
+
+/**
+ * 월별 흐름 근거(D-052): 달마다 하나(month[i]). 절기 달의 이름·날짜, 월건, 두 글자의 뜻, 원국과의 관계(주된 관계 먼저), 속한 해.
+ * 관계는 rankRelations 순서이고 맨 앞을 "주된 관계"로 따로 적는다
+ */
+export function monthEvidence(chart: SajuChart, months: readonly MonthPeriod[]): Evidence[] {
+  return months.map((m): Evidence => {
+    const meaning = luckMeaning(chart, m.pillar);
+    const main = m.relations[0];
+    return {
+      id: `month[${m.index}]`,
+      kind: 'month',
+      content:
+        `${m.from.year}년 ${m.from.month}월 월운(절기 ${m.term} ${md(m.from)}~${md(m.to)})은 ${pillarLabel(m.pillar)}: ${luckElements(m.pillar)}. ${meaning.text}. ` +
+        `원국과의 관계: ${luckRelationsText(chart, m.pillar, m.relations)}. 주된 관계: ${main ? luckRelationLabel(chart, m.pillar, main) : '없음'}. ` +
+        `이 달이 속한 해(입춘 기준): ${m.sajuYear}년 ${pillarLabel(m.yearPillar)}`,
+      sourceFields: [`months[${m.index}]`],
+      chartRefs: [...new Set(m.relations.map((r) => r.ref))],
+      terms: luckTerms(chart, m.pillar, meaning.tenGods, m.relations),
+    };
+  });
+}
+
+/** 10년 흐름의 큰 흐름 표시: "경신(庚申)", 해 중간에 바뀌면 "기미(己未)→경신(庚申)(11월 전환)", 첫 대운 전이면 "첫 큰 흐름 전" */
+export function yearDaewoonLabel(y: YearPeriod): string {
+  const now = y.daewoon ? pillarLabel(y.daewoon.pillar) : '첫 큰 흐름 전';
+  return y.nextDaewoon ? `${now}→${pillarLabel(y.nextDaewoon.pillar)}(${y.nextDaewoon.startMonth}월 전환)` : now;
+}
+
+/**
+ * 10년 흐름 근거(D-052): 해마다 하나(year[i]). 세운과 같은 내용에 더해 그해의 큰 흐름(해 중간 전환 포함)과 그해 생일이 지난 뒤의 만 나이
+ */
+export function yearEvidence(chart: SajuChart, years: readonly YearPeriod[]): Evidence[] {
+  return years.map((y): Evidence => {
+    const meaning = luckMeaning(chart, y.pillar);
+    const main = y.relations[0];
+    const flow = y.daewoon ? `${pillarLabel(y.daewoon.pillar)} 대운(${daewoonStartLabel(y.daewoon)}부터)` : '첫 대운 전';
+    const turn = y.nextDaewoon
+      ? `, ${y.nextDaewoon.startYear}년 ${y.nextDaewoon.startMonth}월에 ${pillarLabel(y.nextDaewoon.pillar)} 대운으로 바뀜(${yearDaewoonLabel(y)})`
+      : '';
+    const dws = [y.daewoon, y.nextDaewoon].filter((d): d is DaewoonEntry => !!d);
+    return {
+      id: `year[${y.index}]`,
+      kind: 'year',
+      content:
+        `${y.year}년 연운은 ${pillarLabel(y.pillar)}: ${luckElements(y.pillar)}. ${meaning.text}. ` +
+        `원국과의 관계: ${luckRelationsText(chart, y.pillar, y.relations)}. 주된 관계: ${main ? luckRelationLabel(chart, y.pillar, main) : '없음'}. ` +
+        `이 해의 큰 흐름: ${flow}${turn}. 이 해 생일이 지난 뒤 만 ${y.ageAfterBirthday}세`,
+      sourceFields: [`years[${y.index}]`],
+      chartRefs: [...new Set(y.relations.map((r) => r.ref)), ...dws.map((d) => `daewoon[${d.index}]` as ChartRef)],
+      terms: [...luckTerms(chart, y.pillar, meaning.tenGods, y.relations), ...dws.flatMap((d) => [pillarKo(d.pillar), pillarHanja(d.pillar)])],
     };
   });
 }
