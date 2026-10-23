@@ -22,6 +22,36 @@ export interface TopicDraft {
   sentences: ReportSentence[];
 }
 
+/** 월별 흐름(달마다) 또는 10년 흐름(해마다)의 한 칸(D-052) */
+export interface PeriodNote {
+  index: number;
+  sentences: ReportSentence[];
+}
+
+/** 월별 흐름·10년 흐름 호출 결과(D-052): periods는 index 0부터 차례로 */
+export interface PeriodDraft {
+  periods: PeriodNote[];
+}
+
+/** 아이 리포트의 부모 관점 요약 호출 결과(D-052): 절기 달 3개씩 4묶음 + 10년 */
+export interface ChildPeriodDraft {
+  seasons: PeriodNote[];
+  years: PeriodNote[];
+}
+
+/**
+ * 리포트 본문의 월별·10년 흐름(D-052). 사실(간지·날짜·관계)은 저장하지 않고 차트와 asOf·referenceYear로 다시 계산한다.
+ * 어른은 months, 아이는 seasons(달 0~11을 3개씩)이고 둘 다 years가 있다
+ */
+export interface ReportPeriods {
+  /** 첫 달을 정한 시각(주문 시각, ISO) */
+  asOf: string;
+  referenceYear: number;
+  months?: PeriodNote[];
+  seasons?: PeriodNote[];
+  years: PeriodNote[];
+}
+
 export interface ReportBody {
   /** 템플릿 문장 + AI 문장 */
   summary: ReportSentence[];
@@ -38,6 +68,10 @@ export interface ReportBody {
   templated?: string[];
   /** 코드 사실 문장으로 바꾼 문장 수 (D-050) */
   templatedSentences?: number;
+  /** AI에게 쓰라고 요청한 문장 수(대체 전, D-052). 운영자 알림 비율(templatedSentences ÷ 이 수)의 분모 */
+  requestedSentences?: number;
+  /** 월별·10년 흐름(D-052). 없으면(이전 리포트) 보여 주지 않는다 */
+  periods?: ReportPeriods;
   /** 다시 쓰게 하지 않고 기록만 남기는 검사에 걸린 최종 문장 수(D-051): 각도 이름 옮겨 쓰기, 합·충 얇은 끝맺음 */
   observed?: { angleCopy: number; thinRelation: number };
 }

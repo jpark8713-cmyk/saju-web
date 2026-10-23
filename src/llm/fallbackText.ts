@@ -10,9 +10,11 @@ import { daewoonStartLabel } from '../engine/daewoon';
 import { luckRelations, type LuckRelation } from '../engine/relations';
 import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
 import type { ChartRef, Evidence, PillarPosition, SajuChart, TenGod } from '../engine/types';
+import { yearDaewoonLabel } from '../engine/evidence';
+import type { MonthPeriod, SeasonPeriod, YearPeriod } from '../engine/periods';
 import type { Audience } from '../report/audience';
-import { josa } from '../report/evidenceTerms';
-import type { BaseDraft, ReportSentence, TopicDraft } from './types';
+import { hasBatchim, josa } from '../report/evidenceTerms';
+import type { BaseDraft, ChildPeriodDraft, PeriodDraft, PeriodNote, ReportSentence, TopicDraft } from './types';
 
 interface Voice {
   /** "나를 뺀" */
@@ -213,4 +215,111 @@ export function patchTopic(draft: TopicDraft, tpl: TopicDraft, paths: readonly s
     }
   }
   return { value: { sentences: next }, replaced };
+}
+
+// ---- 월별·10년 흐름(D-052) ----
+
+const REL_SHORT: Record<LuckRelation['kind'], string> = {
+  same: '같은 글자', stemCombine: '서로 끌려 묶이는 관계', stemClash: '서로 부딪치는 관계', branchSixCombine: '짝을 이뤄 묶이는 관계', branchClash: '정면으로 부딪치는 관계',
+};
+
+/** 달 하나의 사실 문장 2개(그달 근거 month[i]를 인용) */
+export function monthFacts(chart: SajuChart, m: MonthPeriod): ReportSentence[] {
+  const id = `month[${m.index}]`;
+  const day = chart.pillars.day.stem;
+  const name = `${m.from.year}년 ${m.from.month}월`;
+  const stem = stemLabel(m.pillar.stem);
+  const branch = branchLabel(m.pillar.branch);
+  const rel = m.relations[0];
+  const second = rel
+    ? s(`${name}의 ${josa(rel.luckPart === 'stem' ? `윗글자 ${stem}` : `아랫글자 ${branch}`, '은/는')} ${josa(placeGlyph(chart, rel.ref), '와/과')} ${REL_SHORT[rel.kind]}예요.`, id)
+    : s(`${name}의 아랫글자 ${josa(branch, '은/는')} ${josa(groupPlain(tenGodOfBranch(day, m.pillar.branch)), '을/를')} 뜻하는 글자예요.`, id);
+  return [
+    s(`${name}은 ${pillarLabel(m.pillar)}의 달로, 윗글자 ${josa(stem, '은/는')} ${josa(groupPlain(tenGodOfStem(day, m.pillar.stem)), '을/를')} 뜻하는 글자예요.`, id),
+    second,
+  ];
+}
+
+/** 해 하나의 사실 문장(그해 근거 year[i]를 인용). 아이 요약은 첫 문장만 쓴다. grown: 만 13세 이상이 되는 해(아이 호칭을 쓰지 않는다) */
+export function yearFacts10(chart: SajuChart, y: YearPeriod, audience: Pick<Audience, 'child'>): ReportSentence[] {
+  const id = `year[${y.index}]`;
+  const day = chart.pillars.day.stem;
+  const stem = stemLabel(y.pillar.stem);
+  const meaning = `윗글자 ${josa(stem, '은/는')} ${josa(groupPlain(tenGodOfStem(day, y.pillar.stem)), '을/를')} 뜻하는 글자예요.`;
+  const first = audience.child
+    ? s(`${y.year}년은 ${y.ageAfterBirthday < 13 ? '아이가 ' : ''}만 ${y.ageAfterBirthday}세가 되는 해로, ${meaning}`, id)
+    : s(`${y.year}년은 ${pillarLabel(y.pillar)}의 해로, ${meaning}`, id);
+  const flow = y.nextDaewoon
+    ? s(`${y.year}년에는 큰 흐름이 ${yearDaewoonLabel(y)}${hasBatchim(yearDaewoonLabel(y)) ? '으로' : '로'} 바뀌어요.`, id)
+    : y.daewoon
+      ? s(`${y.year}년의 큰 흐름은 ${josa(pillarLabel(y.daewoon.pillar), '이에요/예요')}.`, id)
+      : s(`${y.year}년은 첫 큰 흐름이 시작되기 전이에요.`, id);
+  return [first, flow];
+}
+
+/** 어른 월별 흐름 전체를 사실 문장으로 */
+export function fallbackMonths(chart: SajuChart, months: readonly MonthPeriod[]): PeriodDraft {
+  return { periods: months.map((m) => ({ index: m.index, sentences: monthFacts(chart, m).slice(0, REPORT_LAYOUT.monthSentences) })) };
+}
+
+/** 어른 10년 흐름 전체를 사실 문장으로 */
+export function fallbackYears(chart: SajuChart, years: readonly YearPeriod[]): PeriodDraft {
+  return { periods: years.map((y) => ({ index: y.index, sentences: yearFacts10(chart, y, { child: false }).slice(0, REPORT_LAYOUT.yearSentences) })) };
+}
+
+/** 아이 부모 관점 요약 전체를 사실 문장으로: 묶음마다 첫 달·가운데 달의 첫 사실, 해마다 첫 사실 */
+export function fallbackChildPeriods(chart: SajuChart, months: readonly MonthPeriod[], seasons: readonly SeasonPeriod[], years: readonly YearPeriod[]): ChildPeriodDraft {
+  return {
+    seasons: seasons.map((g) => ({
+      index: g.index,
+      sentences: [g.monthIndices[0]!, g.monthIndices[1] ?? g.monthIndices[0]!].map((i) => monthFacts(chart, months[i]!)[0]!).slice(0, REPORT_LAYOUT.seasonSentences),
+    })),
+    years: years.map((y) => ({ index: y.index, sentences: yearFacts10(chart, y, { child: true }).slice(0, REPORT_LAYOUT.childYearSentences) })),
+  };
+}
+
+/** 칸 묶음 하나(prefix: months·years·seasons)에서 걸린 문장만 바꾼다. 위치를 알 수 없으면 null(칸 전체를 바꾼다) */
+function patchNotes(notes: readonly PeriodNote[], tpl: readonly PeriodNote[], paths: readonly string[], prefix: string): { notes: PeriodNote[]; replaced: number } | null {
+  const next = notes.map((n) => ({ ...n, sentences: [...n.sentences] }));
+  let replaced = 0;
+  for (const p of paths) {
+    const one = new RegExp(`^${prefix}\\[(\\d+)\\]\\[(\\d+)\\]$`, 'u').exec(p);
+    const whole = new RegExp(`^${prefix}\\[(\\d+)\\]$`, 'u').exec(p);
+    if (one) {
+      const [i, j] = [Number(one[1]), Number(one[2])];
+      const t = tpl[i]?.sentences[j];
+      if (!t || !next[i] || j >= next[i]!.sentences.length) return null;
+      if (next[i]!.sentences[j] !== t) {
+        next[i]!.sentences[j] = t;
+        replaced++;
+      }
+    } else if (whole) {
+      const i = Number(whole[1]);
+      if (!tpl[i]) return null;
+      replaced += Math.max(next[i]?.sentences.length ?? 0, tpl[i]!.sentences.length);
+      next[i] = { ...tpl[i]!, sentences: [...tpl[i]!.sentences] };
+    } else {
+      return null;
+    }
+  }
+  return { notes: next, replaced };
+}
+
+const noteSize = (ns: readonly PeriodNote[]) => ns.reduce((n, x) => n + x.sentences.length, 0);
+
+/** 월별·10년 흐름에서 통과하지 못한 문장만 사실 문장으로(D-050과 같은 규칙). prefix: months 또는 years */
+export function patchPeriods(draft: PeriodDraft, tpl: PeriodDraft, paths: readonly string[], prefix: string): { value: PeriodDraft; replaced: number } {
+  const r = patchNotes(draft.periods, tpl.periods, paths, prefix);
+  return r ? { value: { periods: r.notes }, replaced: r.replaced } : { value: tpl, replaced: noteSize(tpl.periods) };
+}
+
+/** 아이 부모 관점 요약에서 통과하지 못한 문장만 사실 문장으로 */
+export function patchChildPeriods(draft: ChildPeriodDraft, tpl: ChildPeriodDraft, paths: readonly string[]): { value: ChildPeriodDraft; replaced: number } {
+  const seasonPaths = paths.filter((p) => p.startsWith('seasons'));
+  const yearPaths = paths.filter((p) => p.startsWith('years'));
+  const other = paths.filter((p) => !p.startsWith('seasons') && !p.startsWith('years'));
+  const sz = patchNotes(draft.seasons, tpl.seasons, seasonPaths, 'seasons');
+  const yz = patchNotes(draft.years, tpl.years, yearPaths, 'years');
+  if (other.length || !sz || !yz) return { value: tpl, replaced: noteSize(tpl.seasons) + noteSize(tpl.years) };
+  return { value: { seasons: sz.notes, years: yz.notes }, replaced: sz.replaced + yz.replaced };
 }

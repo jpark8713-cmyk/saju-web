@@ -35,7 +35,15 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   await expectNoHorizontalScroll(page);
   // 같은 템플릿: 잠겼던 섹션이 같은 제목으로 열린다
   const sections = await page.locator('[data-testid="report-document"] [data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
-  expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'disclaimer']);
+  expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
+  // D-052: 월별 흐름 12칸(계절 묶음 머리 4개), 10년 흐름 10칸, 올해·내년 칸 아래 링크 줄
+  await expect(page.locator('[data-section="months"] [data-period-group]')).toHaveCount(12);
+  await expect(page.locator('[data-section="months"]').getByTestId('period-cluster')).toHaveCount(4);
+  await expect(page.locator('[data-section="years"] [data-period-group]')).toHaveCount(10);
+  await expect(page.locator('[data-section="years"]').getByTestId('period-flow').first()).toContainText('큰 흐름:');
+  await expect(page.locator('[data-section="yearly"]').getByTestId('section-note')).toContainText('월별 흐름');
+  await page.locator('[data-section="yearly"] a[href="#section-years"]').click();
+  await expect(page.locator('#section-years')).toBeInViewport();
   await expect(page.locator('[data-section="topics"]')).toContainText('재물');
   await expect(page.locator('[data-section="topics"]')).not.toContainText('연애·결혼');
   await expect(page.getByTestId('pdf-download')).toBeVisible();
@@ -256,7 +264,13 @@ test('PDF: 각주 번호와 사실 목록이 화면과 일치하고 Noto 글꼴�
   expect(await print.getByTestId('used-by').count()).toBe(0);
   expect(await print.locator('.ref-button').count()).toBe(0);
   const sections = await print.locator('[data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
-  expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'disclaimer']);
+  expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
+  // D-052: PDF에서 월별 흐름은 새 쪽에서 시작해 7번째 달에서 한 번 더 넘기고(2쪽), 10년 흐름도 새 쪽(1쪽)
+  await print.emulateMedia({ media: 'print' });
+  const breaks = await print.evaluate(() => ['[data-section="months"]', '[data-section="months"] [data-period-group="6"]', '[data-section="years"]'].map((q) => getComputedStyle(document.querySelector(q)!).breakBefore));
+  expect(breaks).toEqual(['page', 'page', 'page']);
+  // PDF에는 링크 대신 안내 문구만
+  await expect(print.locator('[data-section="yearly"] .period-link')).toHaveCount(0);
   await ctx.close();
 });
 

@@ -9,8 +9,18 @@ export const REPORT_LAYOUT = Object.freeze({
   /** 대운 흐름: 현재·다음 대운 */
   daewoonNoteCount: 2,
   daewoonNoteSentences: 3,
-  /** 올해·내년 흐름 */
-  yearlySentences: 4,
+  /** 올해·내년 흐름 (D-052: 첫 문장 그해 뜻·관계 + 마지막 행동 제안. 달·해 흐름은 아래 월별·10년 칸에) */
+  yearlySentences: 2,
+  /** 월별 흐름(어른): 절기 달 12개, 달마다 2문장 (D-052) */
+  monthCount: 12,
+  monthSentences: 2,
+  /** 10년 흐름: 해 10개, 어른은 해마다 2문장, 아이는 1문장 (D-052) */
+  yearCount: 10,
+  yearSentences: 2,
+  childYearSentences: 1,
+  /** 아이 리포트의 부모 관점 요약: 절기 달 3개씩 4묶음, 묶음마다 2문장 (D-052) */
+  seasonCount: 4,
+  seasonSentences: 2,
   /** 문장 하나의 최대 글자 수 (공백 포함) */
   maxSentenceChars: 120,
 });
@@ -38,6 +48,9 @@ export const GENERATION = Object.freeze({
    * 끝나지 않은 칸(기본 칸·주제 칸)은 코드 템플릿 사실 문장(fallbackText.ts)으로 채운다. 주문은 실패시키지 않는다.
    */
   hardDeadlineMs: 150_000,
-  /** 한 리포트에서 코드 사실 문장으로 바꾼 문장이 이 수를 넘으면 운영자 알림 로그를 남긴다(D-050, 사업자 결정) */
-  templateAlertSentences: 8,
+  /**
+   * 운영자 알림 기준(D-052, 사업자 결정): 사실 문장으로 바꾼 문장 수가 AI에게 쓰라고 요청한 문장 수(대체 전)의 이 비율을 넘으면 알림 로그를 남긴다.
+   * D-050의 "8개 초과"를 바꿨다(월별·10년이 들어가 요청 문장이 약 2배가 됐다)
+   */
+  templateAlertRatio: 0.1,
 });

@@ -23,7 +23,8 @@ describe('generateReport', () => {
   it('기본 리포트 + 선택한 주제만 호출하고, 총평은 템플릿 문장으로 시작한다', async () => {
     const t = new FakeTransport(validResponder(indices));
     const r = await generateReport(args(t, ['wealth']));
-    expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'topic:wealth']);
+    // D-052: 월별·10년 흐름 호출 2개도 함께 간다
+    expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'decade', 'monthly', 'topic:wealth']);
     expect(Object.keys(r.body.topics)).toEqual(['wealth']);
     const template = summaryTemplate(chart);
     expect(r.body.summary.slice(0, 2)).toEqual(template);
@@ -31,10 +32,10 @@ describe('generateReport', () => {
     expect(r.attempts.every((a) => a.attempt === 1 && a.violations.length === 0)).toBe(true);
   });
 
-  it('주제를 고르지 않으면 기본 리포트만 호출한다', async () => {
+  it('주제를 고르지 않으면 주제 호출 없이 기본 리포트와 월별·10년 흐름만 호출한다', async () => {
     const t = new FakeTransport(validResponder(indices));
     const r = await generateReport(args(t, []));
-    expect(t.requests.map((q) => q.label)).toEqual(['base']);
+    expect(t.requests.map((q) => q.label)).toEqual(['base', 'monthly', 'decade']);
     expect(r.body.topics).toEqual({});
   });
 
@@ -77,7 +78,7 @@ describe('generateReport', () => {
     let n = 0;
     const t = new FakeTransport(() => (n < 3 ? replies[n++]! : { body: validBase(indices, ['dayMaster'], groups) }));
     const r = await generateReport(args(t, []));
-    expect(r.attempts.filter((a) => a.stopReason !== 'templatePatched').map((a) => a.violations[0]?.code)).toEqual(['schema', 'refusal', 'maxTokens']);
+    expect(r.attempts.filter((a) => a.label === 'base' && a.stopReason !== 'templatePatched').map((a) => a.violations[0]?.code)).toEqual(['schema', 'refusal', 'maxTokens']);
   });
 
   it('대운 해설은 지정한 대운 순서와 그 대운 근거 인용을 지킨다', async () => {
@@ -86,8 +87,9 @@ describe('generateReport', () => {
     let n = 0;
     const t = new FakeTransport(() => ({ body: n++ === 0 ? swapped : validBase(indices, ['dayMaster'], groups) }));
     const r = await generateReport(args(t, []));
-    expect(r.attempts[0]!.violations.map((v) => v.code)).toContain('wrongDaewoon');
-    expect(r.attempts).toHaveLength(2);
+    const base = r.attempts.filter((a) => a.label === 'base');
+    expect(base[0]!.violations.map((v) => v.code)).toContain('wrongDaewoon');
+    expect(base).toHaveLength(2);
   });
 });
 
@@ -166,7 +168,7 @@ describe('검증이 아닌 이유로 멈추면', () => {
     const gi = err as GenerationInterrupted;
     expect(gi.cause).toBe(apiError);
     // 먼저 끝난 기본 리포트의 결제된 시도가 기록에 남는다 (API 오류 호출은 응답이 없어 기록 없음)
-    expect(gi.attempts.map((a) => [a.label, a.attempt])).toEqual([['base', 1]]);
+    expect(gi.attempts.filter((a) => a.label === 'base').map((a) => [a.label, a.attempt])).toEqual([['base', 1]]);
     expect(calls).toBe(2);
   });
 });
@@ -188,7 +190,8 @@ describe('D-045: 올해·내년 마지막 문장 연결, 칸을 가로지르는 
     const codes = base[0]!.violations.map((v) => `${v.code}:${v.path}`);
     expect(codes).toContain('yearlyNotPersonal:yearly.thisYear[0]');
     expect(codes).toContain(`yearlyNotPersonal:yearly.thisYear[${REPORT_LAYOUT.yearlySentences - 1}]`);
-    expect(codes.some((c) => c.startsWith('yearlyNotPersonal:yearly.thisYear[1]'))).toBe(false);
+    // D-052: 올해 칸이 2문장이라 첫 문장(0)과 마지막 문장(1)만 있다. 둘 다 본다
+    expect(REPORT_LAYOUT.yearlySentences).toBe(2);
     expect(base).toHaveLength(2);
   });
 
@@ -277,7 +280,8 @@ describe('D-045 리뷰 2: 반복만 걸린 후보는 남겨 둔다', () => {
     // 모든 문장이 검수에 걸렸으므로 기본 칸 문장이 모두 사실 문장이다
     expect(r.body.traits).toEqual(tpl.traits);
     expect(r.body.yearly).toEqual(tpl.yearly);
-    expect(r.body.templated).toEqual(['base']);
+    // 검수기가 모든 문장을 걸어 월별·10년 칸도 사실 문장으로 바뀐다(D-052: 같은 안전 검수)
+    expect(r.body.templated).toEqual(['base', 'monthly', 'decade']);
   });
 });
 

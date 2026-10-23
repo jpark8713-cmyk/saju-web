@@ -290,14 +290,40 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
         </>
       ) : (
         view.sections.map((sec) => (
-          <section key={sec.id} className="section" data-section={sec.id}>
+          <section key={sec.id} id={`section-${sec.id}`} className="section" data-section={sec.id}>
             <SectionHead title={sec.title} />
             {sec.groups.map((g, i) => (
-              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div key={i} className={g.cluster || g.flow ? 'period-group' : undefined} data-period-group={g.cluster || g.flow ? i : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {/* 월별 흐름의 계절 묶음 머리(D-052): 묶음이 바뀔 때만 */}
+                {g.cluster && g.cluster !== sec.groups[i - 1]?.cluster && <p className="period-cluster" data-testid="period-cluster">{g.cluster}</p>}
                 {g.subtitle && <h3 className="h3">{g.subtitle}</h3>}
+                {g.flow && (
+                  <p className="period-flow" data-testid="period-flow">
+                    큰 흐름: {g.flow.label}
+                    {g.flow.turning && <span className="period-turn">큰 흐름이 바뀌는 해</span>}
+                  </p>
+                )}
+                {g.chips && g.chips.length > 0 && (
+                  <div className="period-chips" data-testid="period-chips">
+                    {g.chips.map((c) => (
+                      <span key={c.text} className={`period-chip is-${c.kind}`}>{c.text}</span>
+                    ))}
+                  </div>
+                )}
                 <Sentences list={g.sentences} ctx={ctx} />
               </div>
             ))}
+            {sec.note && (
+              <p className="hint period-note" data-testid="section-note">
+                {sec.note.text}
+                {mode === 'screen' &&
+                  sec.note.links.map((l) => (
+                    <a key={l.href} href={l.href} className="period-link">
+                      {l.label} →
+                    </a>
+                  ))}
+              </p>
+            )}
           </section>
         ))
       )}

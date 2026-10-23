@@ -232,3 +232,75 @@ export function topicUserMessage(args: {
     ...(args.angleBlock ? ['', args.angleBlock] : []),
   ].join('\n') + retryNote(args.violations ?? []);
 }
+
+// ---- 월별·10년 흐름(D-052) ----
+
+/** 월별·10년 흐름 칸에 공통으로 붙이는 규칙 */
+function periodRules(kind: 'month' | 'year' | 'child'): string[] {
+  const unit = kind === 'month' ? '달' : kind === 'year' ? '해' : '칸';
+  return [
+    `- ${unit}마다 그 ${unit}의 근거를 꼭 인용합니다. 첫 문장은 그 ${unit} 글자의 뜻 묶음이나 원국 글자와의 관계(근거의 "주된 관계"를 먼저)가 이 사람에게 어떻게 나타나는지 씁니다. 관계를 말한 문장은 모습·경향으로만 쓰고 행동 제안으로 끝내지 않습니다.`,
+    `- 둘째 문장은 그 뜻에 맞춘 생활 제안입니다. 같은 행동 제안은 두 ${unit}까지만 쓰고, ${unit}마다 첫머리를 다르게 시작합니다.`,
+    '- 근거에 없는 구체 장면(모임·회식·여행·휴가·출장·면접·입사·계약·대출·이사·결혼식 같은 일정)을 지어내지 않습니다. 장면 없이 그 뜻에 맞춘 마음가짐·생활 습관으로 씁니다.',
+    '- 달·해 이름, 날짜, 나이는 근거에 적힌 표기 그대로 씁니다.',
+  ];
+}
+
+/** 어른 월별 흐름: 절기 달 12칸 × 2문장 */
+export function monthlyUserMessage(args: {
+  evidence: readonly Evidence[];
+  monthCount: number;
+  violations?: readonly Violation[];
+  angleBlock?: string;
+}): string {
+  return [
+    evidenceBlock(args.evidence),
+    '',
+    '## 작성할 칸: 월별 흐름',
+    `- periods: index 0부터 ${args.monthCount - 1}까지 차례로 ${args.monthCount}칸, 칸마다 ${REPORT_LAYOUT.monthSentences}문장. index i는 month[i] 근거의 절기 달입니다.`,
+    ...periodRules('month'),
+    ...(args.angleBlock ? ['', args.angleBlock] : []),
+  ].join('\n') + retryNote(args.violations ?? []);
+}
+
+/** 어른 10년 흐름: 해 10칸 × 2문장 */
+export function decadeUserMessage(args: {
+  evidence: readonly Evidence[];
+  yearCount: number;
+  violations?: readonly Violation[];
+  angleBlock?: string;
+}): string {
+  return [
+    evidenceBlock(args.evidence),
+    '',
+    '## 작성할 칸: 10년 흐름',
+    `- periods: index 0부터 ${args.yearCount - 1}까지 차례로 ${args.yearCount}칸, 칸마다 ${REPORT_LAYOUT.yearSentences}문장. index i는 year[i] 근거의 해입니다.`,
+    '- 근거에 큰 흐름(대운)이 바뀐다고 적힌 해는 그 전환을 한 문장에 씁니다.',
+    ...periodRules('year'),
+    ...(args.angleBlock ? ['', args.angleBlock] : []),
+  ].join('\n') + retryNote(args.violations ?? []);
+}
+
+/** 아이 부모 관점 요약: 절기 달 3개씩 4묶음 × 2문장 + 해 10칸 × 1문장 */
+export function childPeriodUserMessage(args: {
+  evidence: readonly Evidence[];
+  audience: Audience;
+  seasons: readonly { index: number; monthIndices: readonly number[]; name: string }[];
+  years: readonly { index: number; ageAfterBirthday: number }[];
+  violations?: readonly Violation[];
+  angleBlock?: string;
+}): string {
+  return [
+    childNote(args.audience),
+    '',
+    evidenceBlock(args.evidence),
+    '',
+    '## 작성할 칸: 계절별 흐름과 10년 흐름(부모가 읽는 요약)',
+    `- seasons: index 0부터 ${args.seasons.length - 1}까지 차례로, 묶음마다 ${REPORT_LAYOUT.seasonSentences}문장. 문장마다 그 묶음 달 근거 중 하나 이상을 인용합니다. 그 계절에 아이에게 보일 수 있는 모습과 부모가 챙길 일로 씁니다.`,
+    ...args.seasons.map((g) => `  - 묶음 ${g.index}(${g.name}): ${g.monthIndices.map((i) => `month[${i}]`).join(', ')}`),
+    `- years: index 0부터 ${args.years.length - 1}까지 차례로, 해마다 ${REPORT_LAYOUT.childYearSentences}문장. index i는 year[i] 근거의 해이고, 그해 아이 나이(근거의 만 나이)에 맞춰 씁니다.`,
+    ...args.years.filter((y) => y.ageAfterBirthday >= 13).map((y) => `  - year[${y.index}]: 만 ${y.ageAfterBirthday}세가 되는 해 → 부모가 해 줄 일이 아니라 그 나이대 문장으로, "아이"·"나" 없이 씁니다.`),
+    ...periodRules('child'),
+    ...(args.angleBlock ? ['', args.angleBlock] : []),
+  ].join('\n') + retryNote(args.violations ?? []);
+}

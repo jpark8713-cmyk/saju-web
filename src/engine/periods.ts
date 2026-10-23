@@ -118,3 +118,29 @@ export function yearsFrom(chart: SajuChart, referenceYear: number, count = 10): 
     };
   });
 }
+
+const SEASON_OF_TERM: Record<string, string> = {
+  입춘: '봄', 경칩: '봄', 청명: '봄', 입하: '여름', 망종: '여름', 소서: '여름',
+  입추: '가을', 백로: '가을', 한로: '가을', 입동: '겨울', 대설: '겨울', 소한: '겨울',
+};
+
+export interface SeasonPeriod {
+  index: number;
+  /** 이 묶음의 달 index (3개씩 차례로) */
+  monthIndices: number[];
+  /** 가운데 달의 계절 이름(봄·여름·가을·겨울) */
+  name: string;
+  from: KstDate;
+  to: KstDate;
+}
+
+/** 아이 리포트의 부모 관점 요약(D-052): 생성 달부터 절기 달 3개씩 묶는다. 이름은 가운데 달의 계절이다 */
+export function seasonsOf(months: readonly MonthPeriod[], size = 3): SeasonPeriod[] {
+  const out: SeasonPeriod[] = [];
+  for (let i = 0; i * size < months.length; i++) {
+    const group = months.slice(i * size, i * size + size);
+    const mid = group[Math.floor((group.length - 1) / 2)]!;
+    out.push({ index: i, monthIndices: group.map((m) => m.index), name: SEASON_OF_TERM[mid.term] ?? '', from: group[0]!.from, to: group.at(-1)!.to });
+  }
+  return out;
+}

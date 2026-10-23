@@ -4,25 +4,33 @@
 // 검수 호출 자체가 실패하면 문장을 통과시키지 않고 생성 실패로 처리한다(Docs/decisions.md D-020).
 import { GENERATION, REPORT_LAYOUT } from '../config/report';
 import { findTopic, type ForbiddenRule, type TopicConfig } from '../config/topics';
-import type { Evidence, SajuChart } from '../engine/types';
+import type { Evidence, Pillar, SajuChart } from '../engine/types';
 import { audienceOf } from '../report/audience';
 import { summaryTemplate } from '../report/summaryTemplate';
 import { targetDaewoonIndices, topicEvidence } from './evidenceSelect';
-import { CHILD_FORBIDDEN, CHILD_VOICE_FORBIDDEN, COMMON_FORBIDDEN, GROWN_NOTE_FORBIDDEN, TODDLER_FORBIDDEN, TODDLER_MONEY_FORBIDDEN } from './forbidden';
+import {
+  CHILD_FORBIDDEN, CHILD_VOICE_FORBIDDEN, COMMON_FORBIDDEN, GROWN_NOTE_FORBIDDEN, PERIOD_SCENE_FORBIDDEN, TODDLER_FORBIDDEN, TODDLER_MONEY_FORBIDDEN,
+} from './forbidden';
 import { CATEGORY_KO, ModerationUnavailable, type ModerationCallRecord, type ModerationFlag, type Moderator } from './moderation';
-import { SYSTEM_PROMPT, baseUserMessage, topicUserMessage } from './prompt';
-import { BASE_JSON_SCHEMA, TOPIC_JSON_SCHEMA, parseBaseDraft, parseTopicDraft, type ParseResult } from './schema';
+import { SYSTEM_PROMPT, baseUserMessage, childPeriodUserMessage, decadeUserMessage, monthlyUserMessage, topicUserMessage } from './prompt';
+import {
+  BASE_JSON_SCHEMA, CHILD_PERIOD_JSON_SCHEMA, PERIOD_JSON_SCHEMA, TOPIC_JSON_SCHEMA, parseBaseDraft, parseChildPeriodDraft, parsePeriodDraft, parseTopicDraft,
+  type ParseResult,
+} from './schema';
 import type { TokenUsage } from './pricing';
 import type { LlmTransport } from './transport';
-import type { BaseDraft, ReportBody, ReportSentence, TopicDraft, Violation } from './types';
+import type { BaseDraft, ChildPeriodDraft, PeriodDraft, PeriodNote, ReportBody, ReportSentence, TopicDraft, Violation } from './types';
 import {
   prepareRules, repeatedWordCounts, validateAngleCopy, validateAngleMix, validateConcreteCase, validateInventedCount, validateRepeatedStem,
-  validateDoubleBase, validateRepetition, validateSection, validateStandalone, validateVacuous, validateYearly, type PreparedRules, type YearFacts,
+  validateDoubleBase, validateOpenerRepeat, validatePeriodLead, validatePeriodNotes, validateRepetition, validateSection, validateStandalone, validateVacuous,
+  validateYearly, type PeriodFacts, type PreparedRules, type YearFacts,
 } from './validate';
-import { fallbackBase, fallbackTopic, patchBase, patchTopic } from './fallbackText';
+import {
+  fallbackBase, fallbackChildPeriods, fallbackMonths, fallbackTopic, fallbackYears, patchBase, patchChildPeriods, patchPeriods, patchTopic,
+} from './fallbackText';
 import { angleLines, assignAngles, sectionKeys } from './angles';
 import { TEN_GOD_GROUPS } from '../engine/constants';
-import { childVoiceEvidence } from '../engine/evidence';
+import { buildPeriodEvidence, childVoiceEvidence } from '../engine/evidence';
 import { luckRelations } from '../engine/relations';
 import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
 
@@ -121,7 +129,12 @@ interface JobContext {
   now: () => number;
   /** 리포트 전체 시간 상한 신호(D-049). signal에도 합쳐져 있어 진행 중인 호출을 끊는다 */
   hardSignal: AbortSignal;
+  /** 칸별 진행 상태 알림(D-052, 대기 화면) */
+  onProgress?: (label: string, state: JobState) => void;
 }
+
+/** 칸 하나의 진행 상태(D-052): 대기 → 쓰는 중 → 확인 중(AI 검수) → 완료, 또는 사실 문장으로 채움 */
+export type JobState = 'waiting' | 'writing' | 'checking' | 'done' | 'templated';
 
 async function runJob<T>(ctx: JobContext, job: SectionJob<T>): Promise<{ value: T; attempts: AttemptRecord[] }> {
   const attempts: AttemptRecord[] = [];
@@ -162,9 +175,13 @@ async function runJob<T>(ctx: JobContext, job: SectionJob<T>): Promise<{ value: 
     const late = ctx.now() >= ctx.deadline;
     if (late && fallback !== null) {
       const adopted = await tryFallback();
-      if (adopted !== null) return { value: adopted, attempts };
+      if (adopted !== null) {
+        ctx.onProgress?.(job.label, 'done');
+        return { value: adopted, attempts };
+      }
     }
     const isLast = attempt === max || late;
+    ctx.onProgress?.(job.label, 'writing');
     let res;
     try {
       res = await ctx.transport.complete(
@@ -196,14 +213,20 @@ async function runJob<T>(ctx: JobContext, job: SectionJob<T>): Promise<{ value: 
     // 1차(정규식·구조) 통과 → 2차 AI 검수
     const value = (parsed as { ok: true; value: T }).value;
     const flagged = await moderate(ctx, job, value, attempts, base);
-    if (!flagged.length) return { value, attempts };
+    if (!flagged.length) {
+      ctx.onProgress?.(job.label, 'done');
+      return { value, attempts };
+    }
     keep(value, flagged, true);
     previous = flagged;
   }
   // 반복 줄이기(소프트)만 걸렸던 후보가 있으면 검수를 거쳐 그것을 쓴다. 반복 검사 때문에 주문이 실패하지 않게 한다
   if (fallback !== null) {
     const adopted = await tryFallback();
-    if (adopted !== null) return { value: adopted, attempts };
+    if (adopted !== null) {
+      ctx.onProgress?.(job.label, 'done');
+      return { value: adopted, attempts };
+    }
   }
   if (!job.patch) throw new GenerationError(job.label, attempts);
   return { value: await patchUp(ctx, job, salvage, attempts), attempts };
@@ -226,6 +249,7 @@ async function patchUp<T>(
   const last = attempts.at(-1);
   const done = (value: T, replaced: number) => {
     record(ctx, attempts, { label: job.label, attempt: last?.attempt ?? 0, servedModel: 'template', stopReason: 'templatePatched', usage: [], violations: [], replacedSentences: replaced });
+    ctx.onProgress?.(job.label, replaced > 0 ? 'templated' : 'done');
     return value;
   };
   if (!salvage) {
@@ -262,6 +286,7 @@ async function moderate<T>(
   base: Omit<AttemptRecord, 'violations' | 'moderation'>,
 ): Promise<Violation[]> {
   let review;
+  ctx.onProgress?.(job.label, 'checking');
   try {
     review = await ctx.moderator.review(job.sentences(value), ctx.signal);
   } catch (e) {
@@ -290,6 +315,22 @@ function record(ctx: JobContext, attempts: AttemptRecord[], r: AttemptRecord): v
 /** 칸마다 한 번만 다시 쓰게 하는 검사(첫 시도에서만 본다): 한 문장에 개수 기준을 두 번 쓰기(D-051) */
 function firstOnly(attempt: number, v: Violation[]): Violation[] {
   return attempt === 1 ? v : [];
+}
+
+/** 월별·10년 칸의 검수용 문장(위치: months[3][1]) */
+function periodSentences(prefix: string, notes: readonly PeriodNote[]): { path: string; text: string }[] {
+  return notes.flatMap((n, i) => n.sentences.map((s, j) => ({ path: `${prefix}[${i}][${j}]`, text: s.text })));
+}
+
+function childPeriodSentences(d: ChildPeriodDraft): { path: string; text: string }[] {
+  return [...periodSentences('seasons', d.seasons), ...periodSentences('years', d.years)];
+}
+
+/** 그 칸 글자(간지)의 뜻 묶음(쉬운 이름)과 관계가 있는지 */
+function factsOfPillar(chart: SajuChart, p: Pillar, ids: readonly string[], hasRelation: boolean): PeriodFacts {
+  const day = chart.pillars.day.stem;
+  const label = (tg: string) => TEN_GOD_GROUPS.find((g) => (g.members as readonly string[]).includes(tg))!.plain;
+  return { ids, groupLabels: [...new Set([label(tenGodOfStem(day, p.stem)), label(tenGodOfBranch(day, p.branch))])], hasRelation };
 }
 
 function sentencesOf(path: string, xs: readonly ReportSentence[]): { path: string; text: string }[] {
@@ -388,11 +429,15 @@ export interface GenerateArgs {
   now?: () => number;
   /** 시간 상한(ms). 없으면 GENERATION.softDeadlineMs·hardDeadlineMs (테스트·시뮬레이션용) */
   limits?: { softMs?: number; hardMs?: number };
+  /** 칸별 진행 상태 알림(D-052). label: base, topic:<id>, monthly, decade, periods:child */
+  onProgress?: (label: string, state: JobState) => void;
 }
 
 export interface GenerateResult {
   body: ReportBody;
   attempts: AttemptRecord[];
+  /** 월별·10년 흐름 근거(month[i]·year[i], D-052). 리포트와 함께 저장해 사실 카드에 쓴다 */
+  periodEvidence: Evidence[];
 }
 
 function resolveTopics(ids: readonly string[]): TopicConfig[] {
@@ -426,7 +471,15 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
   }
   const fixedTexts = template.map((s) => s.text);
   // 칸별 풀이 각도(D-047): 사주 해시로 시작, 칸마다 다음 각도
-  const angles = assignAngles(args.chart, audience, sectionKeys(topics.map((t) => t.id), daewoonIndices.length));
+  // D-052: 월별·10년 흐름의 칸(month:i·year:i, 아이는 season:i·year:i)을 뒤에 이어 붙인다(앞 칸들의 각도는 그대로다)
+  const L = REPORT_LAYOUT;
+  const asOf = args.asOf ?? new Date();
+  const period = buildPeriodEvidence(args.chart, asOf, args.referenceYear, { child, monthCount: L.monthCount, yearCount: L.yearCount });
+  const periodKeys = [
+    ...(child ? period.seasons.map((g) => `season:${g.index}`) : period.months.map((m) => `month:${m.index}`)),
+    ...period.years.map((y) => `year:${y.index}`),
+  ];
+  const angles = assignAngles(args.chart, audience, [...sectionKeys(topics.map((t) => t.id), daewoonIndices.length), ...periodKeys]);
   const baseAngleBlock = angleLines(angles, [
     { key: 'summary', name: 'summary' },
     { key: 'traits', name: 'traits' },
@@ -443,6 +496,7 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
   const ctx: JobContext = {
     transport: args.transport, moderator: args.moderator, signal: AbortSignal.any([controller.signal, hardController.signal]), log: [],
     deadline: now() + (args.limits?.softMs ?? GENERATION.softDeadlineMs), now, hardSignal: hardController.signal,
+    onProgress: args.onProgress,
   };
   try {
     return await generateWithin();
@@ -452,9 +506,10 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
 
   async function generateWithin(): Promise<GenerateResult> {
   /** 시간 상한에 닿은 작업은 사실 문장으로 바꾸고 기록을 남긴다(비용 0, stopReason으로 구분) */
-  const orTemplate = <T extends BaseDraft | TopicDraft>(label: string, p: Promise<{ value: T; attempts: AttemptRecord[] }>, make: () => T) =>
+  const orTemplate = <T extends Draft>(label: string, p: Promise<{ value: T; attempts: AttemptRecord[] }>, make: () => T) =>
     p.catch((e: unknown) => {
       if (!(e instanceof DeadlineReached)) throw e;
+      ctx.onProgress?.(label, 'templated');
       const value = make();
       const last = ctx.log.filter((a) => a.label === label).at(-1);
       const r: AttemptRecord = {
@@ -477,6 +532,10 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
       }
       throw e;
     });
+
+  // 칸별 진행 표시(D-052): 모든 칸을 "대기"로 먼저 알린 뒤 작업을 시작한다(작업은 만들자마자 "쓰는 중"을 알린다)
+  const jobLabels = ['base', ...topics.map((t) => `topic:${t.id}`), ...(child ? ['periods:child'] : ['monthly', 'decade'])];
+  for (const label of jobLabels) ctx.onProgress?.(label, 'waiting');
 
   const baseJob = orTemplate('base', runJob<BaseDraft>(ctx, {
     label: 'base',
@@ -545,11 +604,134 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
   };
   const topicJobs = topics.map((topic) => topicJob(topic));
 
+  // ---- 월별·10년 흐름(D-052): 기본 칸·주제 칸과 동시에. 검사·안전 검수·사실 문장 대체·시간 상한은 같은 규칙이다 ----
+  // 근거: 일간·묶음 개수·오행 개수(원국 사실) + 그달·그해 근거. 월·연 칸에는 근거에 없는 구체 장면 금지(하드)를 더한다
+  const periodEvidence = [
+    ...reportEvidence.filter((e) => e.kind === 'dayMaster' || e.kind === 'tenGodGroup' || e.kind === 'elementBalance'),
+    ...period.evidence,
+  ];
+  const periodRuleOf = (forbidden: readonly ForbiddenRule[]) =>
+    prepareRules({ evidence: periodEvidence, forbidden: [...forbidden, PERIOD_SCENE_FORBIDDEN], maxChars: L.maxSentenceChars });
+  const periodRules = periodRuleOf(careForbidden);
+  const grownPeriodRules = child ? periodRuleOf([...COMMON_FORBIDDEN, ...CHILD_VOICE_FORBIDDEN, ...GROWN_NOTE_FORBIDDEN]) : periodRules;
+  // AI가 칸을 더 돌려주면(범위 밖 i) 그 칸의 사실은 비어 있다. 칸 수 위반은 validatePeriodNotes가 따로 남긴다
+  const NO_FACTS: PeriodFacts = { ids: [], groupLabels: [], hasRelation: false };
+  const monthFacts = (i: number): PeriodFacts => {
+    const m = period.months[i];
+    return m ? factsOfPillar(args.chart, m.pillar, [`month[${i}]`], m.relations.length > 0) : NO_FACTS;
+  };
+  const yearFactsAt = (i: number): PeriodFacts => {
+    const y = period.years[i];
+    return y ? factsOfPillar(args.chart, y.pillar, [`year[${i}]`], y.relations.length > 0) : NO_FACTS;
+  };
+  const seasonFacts = (i: number): PeriodFacts => {
+    const season = period.seasons[i];
+    if (!season) return NO_FACTS;
+    const ms = season.monthIndices.map((k) => period.months[k]!);
+    return {
+      ids: ms.map((m) => `month[${m.index}]`),
+      groupLabels: [...new Set(ms.flatMap((m) => factsOfPillar(args.chart, m.pillar, [], false).groupLabels))],
+      hasRelation: ms.some((m) => m.relations.length > 0),
+    };
+  };
+  const periodSoft = (ss: { path: string; text: string }[], attempt: number) => [
+    ...validateRepetition(ss),
+    ...validateStandalone(ss),
+    ...firstOnly(attempt, validateDoubleBase(ss)),
+    ...validateRepeatedStem(ss),
+    ...validateInventedCount(ss),
+  ];
+  const periodAngles = (keys: readonly string[], names: readonly string[]) => angleLines(angles, keys.map((key, i) => ({ key, name: names[i]! })));
+  const periodJobs = child
+    ? [orTemplate('periods:child', runJob<ChildPeriodDraft>(ctx, {
+        label: 'periods:child',
+        jsonSchema: CHILD_PERIOD_JSON_SCHEMA,
+        buildUser: (violations) => childPeriodUserMessage({
+          evidence: periodEvidence, audience, seasons: period.seasons, years: period.years, violations,
+          angleBlock: periodAngles(periodKeys, [...period.seasons.map((g) => `seasons[${g.index}]`), ...period.years.map((y) => `years[${y.index}]`)]),
+        }),
+        parse: parseChildPeriodDraft,
+        validate: (d) => [
+          ...validatePeriodNotes(d.seasons, 'seasons', { count: L.seasonCount, sentences: L.seasonSentences }, () => periodRules, seasonFacts),
+          ...validatePeriodNotes(d.years, 'years', { count: L.yearCount, sentences: L.childYearSentences }, (i) => (period.years[i] && period.years[i]!.ageAfterBirthday >= 13 ? grownPeriodRules : periodRules), yearFactsAt),
+        ],
+        softValidate: (d, attempt) => [
+          ...validatePeriodLead(d.seasons, 'seasons', seasonFacts),
+          ...validatePeriodLead(d.years, 'years', yearFactsAt),
+          ...firstOnly(attempt, [...validateOpenerRepeat(d.seasons, 'seasons'), ...validateOpenerRepeat(d.years, 'years')]),
+          ...periodSoft(childPeriodSentences(d), attempt),
+        ],
+        sentences: childPeriodSentences,
+        patch: (d, paths) => {
+          const tpl = fallbackChildPeriods(args.chart, period.months, period.seasons, period.years);
+          return d === null ? { value: tpl, replaced: draftSize(tpl) } : patchChildPeriods(d, tpl, paths);
+        },
+      }), () => fallbackChildPeriods(args.chart, period.months, period.seasons, period.years)).then((r) => ({ kind: 'child' as const, ...r }))]
+    : [
+        orTemplate('monthly', runJob<PeriodDraft>(ctx, {
+          label: 'monthly',
+          jsonSchema: PERIOD_JSON_SCHEMA,
+          buildUser: (violations) => monthlyUserMessage({
+            evidence: periodEvidence, monthCount: L.monthCount, violations,
+            angleBlock: periodAngles(period.months.map((m) => `month:${m.index}`), period.months.map((m) => `periods[${m.index}]`)),
+          }),
+          parse: parsePeriodDraft,
+          validate: (d) => validatePeriodNotes(d.periods, 'months', { count: L.monthCount, sentences: L.monthSentences }, () => periodRules, monthFacts),
+          softValidate: (d, attempt) => [
+            ...validatePeriodLead(d.periods, 'months', monthFacts),
+            ...firstOnly(attempt, validateOpenerRepeat(d.periods, 'months')),
+            ...periodSoft(periodSentences('months', d.periods), attempt),
+          ],
+          sentences: (d) => periodSentences('months', d.periods),
+          patch: (d, paths) => {
+            const tpl = fallbackMonths(args.chart, period.months);
+            return d === null ? { value: tpl, replaced: draftSize(tpl) } : patchPeriods(d, tpl, paths, 'months');
+          },
+        }), () => fallbackMonths(args.chart, period.months)).then((r) => ({ kind: 'months' as const, ...r })),
+        orTemplate('decade', runJob<PeriodDraft>(ctx, {
+          label: 'decade',
+          jsonSchema: PERIOD_JSON_SCHEMA,
+          buildUser: (violations) => decadeUserMessage({
+            evidence: periodEvidence, yearCount: L.yearCount, violations,
+            angleBlock: periodAngles(period.years.map((y) => `year:${y.index}`), period.years.map((y) => `periods[${y.index}]`)),
+          }),
+          parse: parsePeriodDraft,
+          validate: (d) => validatePeriodNotes(d.periods, 'years', { count: L.yearCount, sentences: L.yearSentences }, () => periodRules, yearFactsAt),
+          softValidate: (d, attempt) => [
+            ...validatePeriodLead(d.periods, 'years', yearFactsAt),
+            ...firstOnly(attempt, validateOpenerRepeat(d.periods, 'years')),
+            ...periodSoft(periodSentences('years', d.periods), attempt),
+          ],
+          sentences: (d) => periodSentences('years', d.periods),
+          patch: (d, paths) => {
+            const tpl = fallbackYears(args.chart, period.years);
+            return d === null ? { value: tpl, replaced: draftSize(tpl) } : patchPeriods(d, tpl, paths, 'years');
+          },
+        }), () => fallbackYears(args.chart, period.years)).then((r) => ({ kind: 'years' as const, ...r })),
+      ];
+
+  const settledPeriods = Promise.allSettled(periodJobs.map((p) => guard(p as Promise<unknown>)));
   const settled = await Promise.allSettled([guard(baseJob), ...topicJobs.map(guard)]);
+  const periodResults = await settledPeriods;
   if (failed) {
     if (firstFailure instanceof GenerationError) throw new GenerationError(firstFailure.label, ctx.log, firstFailure.reason);
     throw new GenerationInterrupted(ctx.log, firstFailure);
   }
+  type PeriodResult = { kind: 'child'; value: ChildPeriodDraft } | { kind: 'months' | 'years'; value: PeriodDraft };
+  const periodValues = periodResults.map((r) => (r as PromiseFulfilledResult<PeriodResult>).value);
+  const periodOf = (kind: 'months' | 'years') => (periodValues.find((p) => p.kind === kind)?.value as PeriodDraft | undefined)?.periods;
+  const childPeriods = periodValues.find((p) => p.kind === 'child')?.value as ChildPeriodDraft | undefined;
+  const periods: ReportBody['periods'] = {
+    asOf: asOf.toISOString(),
+    referenceYear: args.referenceYear,
+    ...(child ? { seasons: childPeriods!.seasons } : { months: periodOf('months')! }),
+    years: child ? childPeriods!.years : periodOf('years')!,
+  };
+  const periodTexts = child ? childPeriodSentences(childPeriods!) : [...periodSentences('months', periods.months!), ...periodSentences('years', periods.years)];
+  // 운영자 알림 분모(D-052): AI에게 쓰라고 요청한 문장 수(대체 전)
+  const requestedSentences =
+    L.summaryAiSentences + L.traitsSentences + daewoonIndices.length * L.daewoonNoteSentences + 2 * L.yearlySentences + topics.length * L.topicSentences +
+    (child ? L.seasonCount * L.seasonSentences + L.yearCount * L.childYearSentences : L.monthCount * L.monthSentences + L.yearCount * L.yearSentences);
   const [base, ...firstTopics] = settled.map((r) => (r as PromiseFulfilledResult<unknown>).value) as [
     Awaited<typeof baseJob>,
     ...Awaited<(typeof topicJobs)[number]>[],
@@ -573,9 +755,12 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
       ...(child ? { audience: 'child' as const } : {}),
       angles,
       ...templatedOf(ctx.log),
-      observed: observe([...baseSentences(base.value), ...topics.flatMap((t, i) => sentencesOf(`topics.${t.id}`, topicSentences[i]!))]),
+      requestedSentences,
+      periods,
+      observed: observe([...baseSentences(base.value), ...topics.flatMap((t, i) => sentencesOf(`topics.${t.id}`, topicSentences[i]!)), ...periodTexts]),
     },
     attempts: ctx.log,
+    periodEvidence: period.evidence,
   };
   }
 }
@@ -588,8 +773,13 @@ function observe(sentences: readonly { path: string; text: string }[]): NonNulla
   return { angleCopy: validateAngleCopy(sentences).length, thinRelation: validateVacuous(sentences).length };
 }
 
+type Draft = BaseDraft | TopicDraft | PeriodDraft | ChildPeriodDraft;
+
 /** 초안의 문장 수 */
-function draftSize(d: BaseDraft | TopicDraft): number {
+function draftSize(d: Draft): number {
+  const notes = (ns: readonly PeriodNote[]) => ns.reduce((n, x) => n + x.sentences.length, 0);
+  if ('periods' in d) return notes(d.periods);
+  if ('seasons' in d) return notes(d.seasons) + notes(d.years);
   if ('sentences' in d) return d.sentences.length;
   return d.summary.length + d.traits.length + d.daewoonNotes.reduce((n, x) => n + x.sentences.length, 0) + d.yearly.thisYear.length + d.yearly.nextYear.length;
 }

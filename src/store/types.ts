@@ -79,9 +79,20 @@ export interface Order {
     finishedAt: string | null;
     /** 실패 이유 코드 (사용자 입력·문장 원문 없음) */
     lastFailure: 'validation' | 'moderationUnavailable' | 'interrupted' | null;
+    /** 생성 중 칸별 진행 상태(D-052, 대기 화면). 새 실행을 시작하면 지운다. 칸 이름과 상태만 담는다 */
+    progress?: GenerationProgress[];
   };
   /** 개발 전용: 목 결제창에서 "생성 실패"를 고른 주문 (운영에서는 항상 false) */
   devForceGenerationFailure: boolean;
+}
+
+/** 칸 하나의 진행 상태(D-052): 대기 → 쓰는 중 → 확인 중(AI 검수) → 완료, 또는 사실 문장으로 채움 */
+export interface GenerationProgress {
+  /** 작업 이름: base, topic:<id>, monthly, decade, periods:child */
+  label: string;
+  /** 화면에 보이는 칸 이름 */
+  name: string;
+  state: 'waiting' | 'writing' | 'checking' | 'done' | 'templated';
 }
 
 export interface Report {

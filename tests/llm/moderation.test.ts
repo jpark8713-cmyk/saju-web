@@ -26,7 +26,9 @@ describe('generateReport + AI 검수', () => {
     const texts = m.reviewed.flat().map((x) => x.text);
     const L = REPORT_LAYOUT;
     expect(texts.length).toBe(
-      L.summaryAiSentences + L.traitsSentences + 2 * L.daewoonNoteSentences + 2 * L.yearlySentences + L.topicSentences,
+      L.summaryAiSentences + L.traitsSentences + 2 * L.daewoonNoteSentences + 2 * L.yearlySentences + L.topicSentences +
+        // D-052: 월별·10년 흐름도 안전 검수를 받는다
+        L.monthCount * L.monthSentences + L.yearCount * L.yearSentences,
     );
     for (const t of summaryTemplate(chart)) expect(texts).not.toContain(t.text);
   });
@@ -47,7 +49,7 @@ describe('generateReport + AI 검수', () => {
     const topicAttempts = r.attempts.filter((a) => a.label === 'topic:wealth');
     expect(topicAttempts[0]!.violations.length).toBeGreaterThan(0);
     expect(topicAttempts[0]!.moderation).toBeUndefined();
-    expect(m.reviewed).toHaveLength(2); // 기본 리포트 1회 + 주제 2번째 시도 1회
+    expect(m.reviewed).toHaveLength(4); // 기본 리포트 1회 + 월별 1회 + 10년 1회 + 주제 2번째 시도 1회
   });
 
   it('검수에서 걸리면 범주와 위치만 알려 주고 다시 생성한다 (원문은 기록하지 않음)', async () => {
@@ -95,7 +97,8 @@ describe('generateReport + AI 검수', () => {
     const base = r.attempts.filter((a) => a.label === 'base');
     expect(base.filter((a) => a.stopReason !== 'templatePatched')).toHaveLength(3);
     expect(base.at(-1)).toMatchObject({ stopReason: 'templatePatched', replacedSentences: 1 });
-    expect(r.body.templatedSentences).toBe(1);
+    // 기본·월별·10년 칸마다 첫 문장 하나씩(검수기가 늘 첫 문장을 건다)
+    expect(r.body.templatedSentences).toBe(3);
     // 첫 AI 문장(총평 이어 쓰기 첫 문장)만 사실 문장이고, 나머지는 검수를 통과한 AI 문장이다
     expect(r.body.summary[2]).toEqual(fallbackBase(chart, indices, { child: false }).summary[0]);
     expect(r.body.traits[0]!.text).toContain('근거를 바탕으로 쓴');

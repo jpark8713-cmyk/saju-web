@@ -163,7 +163,8 @@ describe('리포트 뷰 (화면·PDF 공통)', () => {
     const o = await paidOrder(store, { topicIds: ['wealth'] });
     await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
     const view = await reportViewFor(store, o.orderId, o.accessToken);
-    expect(view.sections.map((s) => s.id)).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly']);
+    // D-052: 올해·내년 흐름 뒤에 월별 흐름·10년 흐름
+    expect(view.sections.map((s) => s.id)).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years']);
     const refs = new Set(view.sections.flatMap((s) => s.groups.flatMap((g) => g.sentences.flatMap((x) => x.refs))));
     expect(view.evidence.map((e) => e.n)).toEqual(view.evidence.map((_, i) => i + 1));
     expect([...refs].sort((a, b) => a - b)).toEqual(view.evidence.map((e) => e.n));

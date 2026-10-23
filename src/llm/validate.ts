@@ -350,6 +350,98 @@ export function validateYearly(sentences: readonly ReportSentence[], path: strin
   return out;
 }
 
+// ---- 월별·10년 흐름(D-052) ----
+
+/** 칸 하나(달·해·묶음)의 그 칸 사실: 인용해야 하는 근거 id들, 뜻 묶음(쉬운 이름), 원국과의 관계가 있는지 */
+export interface PeriodFacts {
+  ids: readonly string[];
+  groupLabels: readonly string[];
+  hasRelation: boolean;
+}
+
+/**
+ * 칸 구조(하드): 칸 수, index 차례, 칸마다 문장 수·문장 검사(rulesOf(i)), 칸마다 그 칸 근거를 한 번 이상 인용.
+ * prefix: 위반 위치의 앞부분(months·years·seasons). 위치는 "months[3][1]"처럼 칸·문장 번호다
+ */
+export function validatePeriodNotes(
+  notes: readonly { index: number; sentences: readonly ReportSentence[] }[],
+  prefix: string,
+  expected: { count: number; sentences: number },
+  rulesOf: (i: number) => PreparedRules,
+  factsOf: (i: number) => PeriodFacts,
+): Violation[] {
+  const out: Violation[] = [];
+  if (notes.length !== expected.count) out.push({ code: 'sentenceCount', path: prefix, detail: `${notes.length}칸 (필요 ${expected.count}칸)` });
+  notes.forEach((n, i) => {
+    // 남는 칸은 칸 수 위반 하나로 충분하다(그 칸의 사실이 없어 문장 검사를 하지 않는다)
+    if (i >= expected.count) return;
+    const path = `${prefix}[${i}]`;
+    if (n.index !== i) out.push({ code: 'wrongDaewoon', path, detail: `index ${n.index} (필요 ${i})` });
+    out.push(...validateSection(n.sentences, path, expected.sentences, rulesOf(i)));
+    const ids = factsOf(i).ids;
+    if (!n.sentences.some((s) => s.evidenceIds.some((id) => ids.includes(id)))) {
+      out.push({ code: 'wrongDaewoon', path, detail: `${ids.join(' 또는 ')}를 인용한 문장이 없음` });
+    }
+  });
+  return out;
+}
+
+/**
+ * 칸 첫 문장(soft): 그 칸 근거를 인용하고 그 칸 글자의 뜻 묶음이나 원국과의 관계를 쓴다(올해·내년 첫 문장 검사와 같은 규칙).
+ * 관계를 말한 문장은 행동 제안으로 끝내지 않는다
+ */
+export function validatePeriodLead(
+  notes: readonly { sentences: readonly ReportSentence[] }[],
+  prefix: string,
+  factsOf: (i: number) => PeriodFacts,
+): Violation[] {
+  const out: Violation[] = [];
+  const squashed = (t: string) => t.replace(/\s*·\s*/gu, '·');
+  notes.forEach((n, i) => {
+    const f = factsOf(i);
+    const first = n.sentences[0];
+    if (first) {
+      const t = squashed(first.text);
+      const ok = first.evidenceIds.some((id) => f.ids.includes(id)) && (f.groupLabels.some((l) => t.includes(l)) || (f.hasRelation && LUCK_RELATION_WORD_RE.test(t)));
+      if (!ok) {
+        out.push({ code: 'yearlyNotPersonal', path: `${prefix}[${i}][0]`, detail: `첫 문장은 ${f.ids.join(' 또는 ')}를 인용하고, 그 칸 글자의 뜻(${f.groupLabels.join(', ')})${f.hasRelation ? '이나 원국 글자와의 관계' : ''}를 문장에 씁니다` });
+      }
+    }
+    n.sentences.forEach((s, j) => {
+      if (f.hasRelation && LUCK_RELATION_WORD_RE.test(s.text) && ADVICE_ENDING_RE.test(s.text)) {
+        out.push({ code: 'relationAsAdvice', path: `${prefix}[${i}][${j}]`, detail: '원국 글자와의 관계(묶이는·부딪치는 관계)를 말한 문장은 모습·경향으로만 쓰고 행동 제안으로 끝내지 않습니다' });
+      }
+    });
+  });
+  return out;
+}
+
+/**
+ * 칸 첫머리 틀 반복(soft, 첫 시도에서만): 칸 첫 문장의 앞 세 낱말(연·월·간지 표기를 뗀 뒤)이 같은 칸이 limit개 이상이면 한 번만 다시 쓰게 한다.
+ * 12개월·10년이 같은 틀로 채워지지 않게 한다(D-052)
+ */
+export function validateOpenerRepeat(notes: readonly { sentences: readonly ReportSentence[] }[], prefix: string, limit = 4): Violation[] {
+  const keyOf = (t: string) =>
+    t.replace(/\d{4}\s?년|\d{1,2}\s?월|[가-힣]{1,2}\([\u4e00-\u9fff]{1,2}\)/gu, ' ')
+      .replace(/[,.]/gu, ' ')
+      .split(/\s+/u)
+      .filter((w) => w && !/^(의|은|는|이|가|에|에는)$/u.test(w))
+      .slice(0, 3)
+      .join(' ');
+  const groups = new Map<string, number[]>();
+  notes.forEach((n, i) => {
+    const t = n.sentences[0]?.text;
+    if (!t) return;
+    const k = keyOf(t);
+    if (k) groups.set(k, [...(groups.get(k) ?? []), i]);
+  });
+  return [...groups].filter(([, xs]) => xs.length >= limit).map(([k, xs]) => ({
+    code: 'repeatedWord' as const,
+    path: `${prefix}[${xs[0]}][0]`,
+    detail: `${xs.length}칸의 첫 문장이 같은 틀("${k} …")로 시작합니다. 칸마다 그 칸 글자의 뜻·관계로 다르게 시작합니다`,
+  }));
+}
+
 /** 풀이 말별로 그 말이 들어간 문장 수 */
 export function repeatedWordCounts(texts: readonly string[]): Map<string, number> {
   const m = new Map<string, number>();
@@ -427,8 +519,11 @@ export function validateNumbers(text: string, path: string, cited: readonly Evid
     out.push({ code: 'numberNotInEvidence', path, detail: `인용한 근거에 없는 개수 표기: ${wrongCounts.join(', ')}` });
   }
   const daewoonCited = cited.filter((e) => e.kind === 'daewoon' || e.kind === 'daewoonDirection');
+  // D-052: 10년 흐름 근거(year)에 적힌 대운 시작 표기도 그대로 쓸 수 있다(대운 근거처럼 다른 숫자를 막지는 않는다)
   const citedLabels = new Set(
-    daewoonCited.flatMap((e) => [...normalizeParens(e.content).matchAll(DAEWOON_LABEL_RE)].map((m) => squash(m[0]))),
+    cited
+      .filter((e) => e.kind === 'daewoon' || e.kind === 'daewoonDirection' || e.kind === 'year')
+      .flatMap((e) => [...normalizeParens(e.content).matchAll(DAEWOON_LABEL_RE)].map((m) => squash(m[0]))),
   );
   const example = [...citedLabels][0] ?? 'K세(YYYY년 M월)';
 

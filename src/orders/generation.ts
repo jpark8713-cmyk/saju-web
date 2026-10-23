@@ -10,7 +10,8 @@ import { buildEvidence } from '../engine/evidence';
 import { isChildChart } from '../report/audience';
 import { GenerationError, generateReport } from '../llm/generate';
 import type { LlmRuntime } from '../llm/runtime';
-import { IssuanceImmutable, type Order, type Store } from '../store/types';
+import { IssuanceImmutable, type GenerationProgress, type Order, type Store } from '../store/types';
+import { findTopic } from '../config/topics';
 import { authorizedOrder } from './access';
 import { buildIssuance } from './issuance';
 import { canTransition, transition } from './stateMachine';
@@ -42,6 +43,8 @@ export interface OrderStatusView {
   expiresAt: string | null;
   /** 이메일 발송 상태 (이메일로 받기를 고른 주문) */
   emailStatus: 'none' | 'sending' | 'sent' | 'failed';
+  /** 생성 중 칸별 진행 상태(D-052). 생성 중이 아니면 빈 목록 */
+  progress: GenerationProgress[];
 }
 
 export function statusView(o: Order): OrderStatusView {
@@ -58,6 +61,7 @@ export function statusView(o: Order): OrderStatusView {
     deliveryMethods: o.deliveryMethods,
     expiresAt: d.expiresAt,
     emailStatus: d.email.status,
+    progress: o.status === 'generating' ? (o.generation.progress ?? []) : [],
   };
 }
 
@@ -101,23 +105,31 @@ async function run(store: Store, order: Order, runtime: LlmRuntime, onDone?: OnD
   try {
     if (!birth) throw new Error('출생 정보가 없습니다');
     const chart = buildChart(birth.input, { referenceYear: order.referenceYear });
+    const child = isChildChart(chart, new Date(order.createdAt));
     // 아이 리포트는 근거 문구도 아이 호칭으로 저장한다(사실 카드 "자세히"에 보인다, D-051)
-    const evidence = buildEvidence(chart, { child: isChildChart(chart, new Date(order.createdAt)) });
+    const evidence = buildEvidence(chart, { child });
+    const progress = progressWriter(store, order, myRun, child);
     const result = await generateReport({
       chart, evidence, topicIds: order.topicIds, referenceYear: order.referenceYear,
       transport: runtime.transport, moderator: runtime.moderator,
-      // 아이 리포트 판정(만 나이)은 주문 시각 기준이다. 미리보기도 같은 시점에 보였다(D-044)
+      // 아이 리포트 판정(만 나이)과 월별 흐름의 첫 달은 주문 시각 기준이다. 미리보기도 같은 시점에 보였다(D-044, D-052)
       asOf: new Date(order.createdAt),
+      onProgress: progress.update,
     });
-    // D-050: 검증·검수를 끝내 통과하지 못했거나 시간 상한에 닿아 사실 문장으로 바꾼 문장 수를 남긴다(문장 원문은 남기지 않는다)
+    await progress.flush();
+    // D-050·D-052: 검증·검수를 끝내 통과하지 못했거나 시간 상한에 닿아 사실 문장으로 바꾼 문장 수를 남긴다(문장 원문은 남기지 않는다).
+    // 알림 기준은 AI에게 쓰라고 요청한 문장 수(대체 전)의 10% 초과다
     const replaced = result.body.templatedSentences ?? 0;
-    if (replaced > GENERATION.templateAlertSentences) {
-      console.warn(`[생성 알림] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개(기준 ${GENERATION.templateAlertSentences}개 초과, 칸: ${result.body.templated?.join(', ')})`);
+    const requested = result.body.requestedSentences ?? 0;
+    const where = `칸: ${result.body.templated?.join(', ')}`;
+    if (replaced > requested * GENERATION.templateAlertRatio) {
+      console.warn(`[생성 알림] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개 / 요청 ${requested}개(기준 ${Math.round(GENERATION.templateAlertRatio * 100)}% 초과, ${where})`);
     } else if (replaced > 0) {
-      console.info(`[생성] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개(칸: ${result.body.templated?.join(', ')})`);
+      console.info(`[생성] 주문 ${order.id}: 사실 문장으로 바꾼 문장 ${replaced}개 / 요청 ${requested}개(${where})`);
     }
     const generatedAt = new Date().toISOString();
-    const content = { chart, evidence, body: result.body };
+    // 월별·10년 흐름 근거(month[i]·year[i])도 함께 저장한다(사실 카드, D-052)
+    const content = { chart, evidence: [...evidence, ...result.periodEvidence], body: result.body };
     // 리포트 저장과 완성 표시(보관 기간)는 한 번에 한다. 이 실행이 더는 현재 실행이 아니면 둘 다 하지 않는다(D-036)
     const done = await store.saveReportWith({ orderId: order.id, name: birth.name, birthLabel: birth.label, ...content, createdAt: generatedAt }, (o) =>
       isCurrentRun(o, myRun)
@@ -165,10 +177,40 @@ export async function startGeneration(
     if ((o.status !== 'paid' && o.status !== 'failed') || !canTransition(o.status, 'generating')) return o;
     if (o.generation.runs >= MAX_GENERATION_RUNS) return o;
     flag.started = true;
-    return transition(o, 'generating', { generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: now.toISOString(), finishedAt: null } });
+    // 새 실행은 칸별 진행 표시를 처음부터 다시 쓴다(D-052)
+    return transition(o, 'generating', { generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: now.toISOString(), finishedAt: null, progress: [] } });
   });
   const job = flag.started && updated ? run(store, updated, runtimeFor(updated), onDone) : null;
   return { status: statusView(updated ?? order), job };
+}
+
+const JOB_NAMES: Record<string, string> = { base: '기본 풀이', monthly: '월별 흐름', decade: '10년 흐름', 'periods:child': '계절·10년 흐름' };
+
+/**
+ * 칸별 진행 상태를 주문에 남긴다(D-052). 상태가 바뀔 때마다 차례로 저장하고(앞 저장이 끝난 뒤), 이 실행이 아직 현재 실행일 때만 쓴다.
+ * 반복 줄이기 다시 만들기(:repeat)는 따로 보여 주지 않는다
+ */
+function progressWriter(store: Store, order: Order, myRun: number, child: boolean): { update: (label: string, state: GenerationProgress['state']) => void; flush: () => Promise<void> } {
+  const nameOf = (label: string) => {
+    if (JOB_NAMES[label]) return JOB_NAMES[label]!;
+    const t = findTopic(label.replace(/^topic:/u, ''));
+    return t ? (child ? t.childLabel : t.label) : label;
+  };
+  let list: GenerationProgress[] = [];
+  let chain: Promise<unknown> = Promise.resolve();
+  return {
+    update: (label, state) => {
+      if (label.endsWith(':repeat')) return;
+      const i = list.findIndex((p) => p.label === label);
+      const entry = { label, name: nameOf(label), state };
+      list = i < 0 ? [...list, entry] : list.map((p, k) => (k === i ? entry : p));
+      const snapshot = list;
+      chain = chain
+        .then(() => store.updateOrder(order.id, (o) => (isCurrentRun(o, myRun) ? { ...o, generation: { ...o.generation, progress: snapshot } } : o)))
+        .catch(() => undefined);
+    },
+    flush: () => chain.then(() => undefined),
+  };
 }
 
 /** 상태 조회 (화면 6). 멈춘 생성이면 실패로 바꿔서 보여 준다 */

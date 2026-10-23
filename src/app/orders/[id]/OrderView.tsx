@@ -18,6 +18,38 @@ interface StatusView {
   canRetry: boolean;
   expiresAt: string | null;
   emailStatus: EmailStatus;
+  /** 생성 중 칸별 진행 상태(D-052) */
+  progress?: JobProgress[];
+}
+
+type JobState = 'waiting' | 'writing' | 'checking' | 'done' | 'templated';
+interface JobProgress {
+  label: string;
+  name: string;
+  state: JobState;
+}
+
+const JOB_STATE_TEXT: Record<JobState, string> = {
+  waiting: '대기',
+  writing: '쓰는 중',
+  checking: '확인 중',
+  done: '완료',
+  templated: '사실 문장으로 채움',
+};
+
+/** 칸별 진행 표시(D-052): 기본 풀이·주제·월별·10년 칸마다 상태 */
+function JobList({ jobs }: { jobs: readonly JobProgress[] }) {
+  if (!jobs.length) return null;
+  return (
+    <ul className="job-list" data-testid="job-progress" aria-label="칸별 진행 상태">
+      {jobs.map((j) => (
+        <li key={j.label} data-job={j.label} data-state={j.state}>
+          <span>{j.name}</span>
+          <span className={`job-state is-${j.state}`}>{JOB_STATE_TEXT[j.state]}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export const POLL_MS = 1_500;
@@ -31,7 +63,7 @@ const STEPS: { stage: Stage; label: string }[] = [
   { stage: 'done', label: '완료' },
 ];
 
-function Progress({ stage, orderId, email }: { stage: Stage; orderId: string; email: boolean }) {
+function Progress({ stage, orderId, email, jobs }: { stage: Stage; orderId: string; email: boolean; jobs: readonly JobProgress[] }) {
   const current = STEPS.findIndex((s) => s.stage === stage);
   return (
     <section className="section" data-testid="screen-generating" aria-live="polite">
@@ -44,6 +76,7 @@ function Progress({ stage, orderId, email }: { stage: Stage; orderId: string; em
           </li>
         ))}
       </ol>
+      {stage === 'writing' && <JobList jobs={jobs} />}
       <p className="meta" style={{ margin: 0 }}>
         보통 1분 안쪽, 길면 2분쯤 걸려요. 이 화면을 닫아도 풀이는 계속 만들어져요.
         {email ? ' 완료되면 입력하신 이메일로 링크를 보내 드려요.' : ''}
@@ -277,5 +310,5 @@ export function OrderView({ orderId }: { orderId: string }) {
   if (status?.stage === 'failed') {
     return <Failed orderId={orderId} onRetry={() => void start()} autoRetryPending={autoRetryPending} busy={busy} canRetry={status.canRetry} />;
   }
-  return <Progress stage={status?.stage ?? 'payment'} orderId={orderId} email={order.deliveryMethods.includes('email')} />;
+  return <Progress stage={status?.stage ?? 'payment'} orderId={orderId} email={order.deliveryMethods.includes('email')} jobs={status?.progress ?? []} />;
 }

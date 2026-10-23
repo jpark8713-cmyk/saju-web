@@ -43,6 +43,33 @@ function baseDraft(user: string) {
   };
 }
 
+/** 월별·10년·아이 요약(D-052): 칸마다 그 칸 근거를 인용하고 첫 문장에 그 칸 윗글자의 뜻 묶음을 쓴다 */
+function periodNotes(user: string, idOf: (i: number) => string, count: number, per: number, prefix: string) {
+  const start = user.indexOf('[');
+  const end = user.indexOf('\n\n## 작성할 칸');
+  const rows = start < 0 || end < 0 ? [] : (JSON.parse(user.slice(start, end)) as { id: string; content: string }[]);
+  return Array.from({ length: count }, (_, i) => {
+    const ko = /\((비겁|식상|재성|관성|인성)\)/u.exec(rows.find((e) => e.id === idOf(i))?.content ?? '')?.[1] ?? '비겁';
+    return {
+      index: i,
+      sentences: Array.from({ length: per }, (_, j) => ({
+        text: j === 0 ? `${prefix} ${i + 1}번째 칸은 ${GROUP_PLAIN[ko]}의 뜻이 보이는 때예요(개발용 가짜 문장).` : `${prefix} ${i + 1}번째 칸 풀이 문장이에요(개발용 가짜 문장).`,
+        evidenceIds: [idOf(i)],
+      })),
+    };
+  });
+}
+
+function periodDraft(user: string, label: string) {
+  const L = REPORT_LAYOUT;
+  if (label === 'monthly') return { periods: periodNotes(user, (i) => `month[${i}]`, L.monthCount, L.monthSentences, '월별') };
+  if (label === 'decade') return { periods: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.yearSentences, '10년') };
+  return {
+    seasons: periodNotes(user, (i) => `month[${i * 3}]`, L.seasonCount, L.seasonSentences, '계절'),
+    years: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.childYearSentences, '10년'),
+  };
+}
+
 function topicDraft(user: string) {
   const ids = evidenceIds(user).filter((id) => id.startsWith('tenGodGroup.') || id.startsWith('tenGod.'));
   return { sentences: sentences(REPORT_LAYOUT.topicSentences, ids.length ? ids : ['seun[0]'], '주제') };
@@ -59,7 +86,9 @@ export class DevFakeTransport implements LlmTransport {
   async complete(req: LlmRequest): Promise<LlmResponse> {
     const usage = [{ model: this.model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }];
     if (this.mode === 'fail') throw new Error('개발용 생성 실패(화면 B 재현)');
-    const body = req.label === 'base' ? baseDraft(req.user) : topicDraft(req.user);
+    const body = req.label === 'base' ? baseDraft(req.user)
+      : req.label === 'monthly' || req.label === 'decade' || req.label === 'periods:child' ? periodDraft(req.user, req.label)
+        : topicDraft(req.user);
     return { text: JSON.stringify(body), stopReason: 'end_turn', servedModel: this.model, usage };
   }
 }

@@ -136,7 +136,7 @@ describe('3) 검증 3회 실패 → 걸린 문장만 사실 문장으로 대체 
     expect(saved.status).toBe('done');
     const report = (await store.getReport(o.orderId))!;
     expect(report.body.templated).toEqual(['base', 'topic:wealth']);
-    expect(report.body.templatedSentences!).toBeGreaterThan(GENERATION.templateAlertSentences);
+    expect(report.body.templatedSentences!).toBeGreaterThan(report.body.requestedSentences! * GENERATION.templateAlertRatio);
     const alert = warn.mock.calls.map((c) => String(c[0])).find((m) => m.startsWith('[생성 알림]'));
     expect(alert).toContain(`사실 문장으로 바꾼 문장 ${report.body.templatedSentences}개`);
     expect(alert).not.toMatch(/1990|생년월일/u);

@@ -5,7 +5,7 @@ import {
   pillarKo, pillarLabel, stemLabel, stemYinYang,
 } from './constants';
 import { daewoonStartLabel } from './daewoon';
-import type { KstDate, MonthPeriod, YearPeriod } from './periods';
+import { monthsFrom, seasonsOf, yearsFrom, type KstDate, type MonthPeriod, type SeasonPeriod, type YearPeriod } from './periods';
 import { luckRelations, type LuckRelation } from './relations';
 import { tenGodOfBranch, tenGodOfStem } from './tenGods';
 import type { ChartRef, DaewoonEntry, Element, Evidence, Pillar, PillarPosition, Relation, SajuChart, TenGod } from './types';
@@ -337,4 +337,20 @@ export function isValidChartRef(chart: SajuChart, ref: string): boolean {
   if (listRef) return Number(listRef[2]) < chart[listRef[1] as 'daewoon' | 'seun'].length;
   const elRef = /^elements\.(wood|fire|earth|metal|water)$/.exec(ref);
   return elRef !== null;
+}
+
+/**
+ * 월별·10년 흐름의 사실과 근거를 한 번에(D-052). 생성·화면·측정이 같은 값을 쓰도록 한 곳에서 만든다.
+ * asOf: 첫 달을 정하는 시각(주문 시각). child: 아이 호칭 근거 문구
+ */
+export function buildPeriodEvidence(
+  chart: SajuChart,
+  asOf: Date,
+  referenceYear: number,
+  opts: { child?: boolean; monthCount?: number; yearCount?: number } = {},
+): { months: MonthPeriod[]; years: YearPeriod[]; seasons: SeasonPeriod[]; evidence: Evidence[] } {
+  const months = monthsFrom(chart, asOf.getTime(), opts.monthCount ?? 12);
+  const years = yearsFrom(chart, referenceYear, opts.yearCount ?? 10);
+  const evidence = [...monthEvidence(chart, months), ...yearEvidence(chart, years)];
+  return { months, years, seasons: seasonsOf(months), evidence: opts.child ? evidence.map(childVoiceEvidence) : evidence };
 }

@@ -10,7 +10,12 @@ import {
   TEN_GOD_GROUPS, TEN_GOD_KO, branchLabel, pillarLabel, stemLabel,
 } from '../engine/constants';
 import { daewoonStartLabel } from '../engine/daewoon';
+import { yearDaewoonLabel } from '../engine/evidence';
+import type { MonthPeriod, YearPeriod } from '../engine/periods';
 import { luckRelations } from '../engine/relations';
+
+/** 월별·10년 흐름 사실(D-052) */
+type PeriodFactsInput = { months: readonly MonthPeriod[]; years: readonly YearPeriod[] };
 import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
 import type { ChartRef, Evidence, Pillar, PillarPosition, Relation, SajuChart, TenGod } from '../engine/types';
 import type { ReportAngles } from './angleTable';
@@ -97,6 +102,11 @@ function slotOf(chart: SajuChart, id: string): Slot {
   if (dw) return { key: id, group: 'luck', order: 1 + Number(dw[1]) };
   const se = /^seun\[(\d+)\]$/.exec(id);
   if (se) return { key: id, group: 'luck', order: 1000 + Number(se[1]) };
+  // D-052: 월별·10년 흐름의 그달·그해 근거는 따로 묶는다(달 먼저, 해 다음)
+  const mo = /^month\[(\d+)\]$/.exec(id);
+  if (mo) return { key: id, group: 'period', order: Number(mo[1]) };
+  const yr = /^year\[(\d+)\]$/.exec(id);
+  if (yr) return { key: id, group: 'period', order: 100 + Number(yr[1]) };
   return { key: id, group: 'luck', order: 2000 };
 }
 
@@ -188,19 +198,37 @@ function luckText(chart: SajuChart, key: string, v: Voice): string {
 }
 
 /** 그해 글자와 원국 글자의 관계(D-048). 세운 근거 문구와 같은 계산(luckRelations)이다 */
-function luckRelationText(chart: SajuChart, pillar: Pillar, v: Voice): string {
+function luckRelationText(chart: SajuChart, pillar: Pillar, v: Voice, unit = '그해'): string {
   const rels = luckRelations(chart.pillars, pillar);
   if (!rels.length) return ` ${v.mine} 글자와 같은 글자·묶이는 관계·부딪치는 관계는 없어요.`;
   return rels
     .map((r) => {
-      const own = r.luckPart === 'stem' ? `그해 윗글자 ${stemLabel(pillar.stem)}` : `그해 아랫글자 ${branchLabel(pillar.branch)}`;
+      const own = r.luckPart === 'stem' ? `${unit} 윗글자 ${stemLabel(pillar.stem)}` : `${unit} 아랫글자 ${branchLabel(pillar.branch)}`;
       const what = r.kind === 'same' ? '같은 글자예요' : `${RELATION_TEXT[r.kind].plain}예요`;
       return ` ${josa(own, '은/는')} ${josa(placeGlyph(chart, r.ref), '와/과')} ${what}.`;
     })
     .join('');
 }
 
-function plainTextOf(chart: SajuChart, key: string, v: Voice): string {
+/** 그달·그해 사실(D-052). periods: 리포트의 월별·10년 흐름 사실(생성 때와 같은 계산) */
+function periodText(chart: SajuChart, key: string, v: Voice, periods?: PeriodFactsInput): string | null {
+  const mo = /^month\[(\d+)\]$/.exec(key);
+  const m = mo ? periods?.months[Number(mo[1])] : undefined;
+  if (m) {
+    const name = `${m.from.year}년 ${m.from.month}월(${m.term} ${m.from.month}/${m.from.day}~${m.to.month}/${m.to.day})`;
+    return `${name}은 ${pillarLabel(m.pillar)}의 달이에요. ${luckGlyphText(chart, m.pillar, v)}${luckRelationText(chart, m.pillar, v, '그달')}`;
+  }
+  const yr = /^year\[(\d+)\]$/.exec(key);
+  const y = yr ? periods?.years[Number(yr[1])] : undefined;
+  if (y) {
+    return `${y.year}년은 ${pillarLabel(y.pillar)}의 해예요. ${luckGlyphText(chart, y.pillar, v)}${luckRelationText(chart, y.pillar, v)} 큰 흐름은 ${yearDaewoonLabel(y)}이고, 그해 생일이 지나면 만 ${y.ageAfterBirthday}세예요.`;
+  }
+  return null;
+}
+
+function plainTextOf(chart: SajuChart, key: string, v: Voice, periods?: PeriodFactsInput): string {
+  const period = periodText(chart, key, v, periods);
+  if (period !== null) return period;
   if (key === 'me') return meText(chart, v);
   if (key === 'elements') return elementsText(chart, v);
   if (key.startsWith('group.')) return groupText(chart, TEN_GOD_GROUPS.findIndex((g) => `group.${g.id}` === key), v);
@@ -262,7 +290,10 @@ function definitionOf(chart: SajuChart, key: string, v: Voice = ADULT_VOICE): { 
   }
   const se = /^seun\[(\d+)\]$/.exec(key);
   const y = se ? chart.seun[Number(se[1])] : undefined;
-  return { terms: ['세운: 그해의 간지가 가져오는 한 해의 흐름이에요.'], baseIds: [], extra: y ? [luckTenGods(chart, y.pillar)] : [] };
+  if (se) return { terms: ['세운: 그해의 간지가 가져오는 한 해의 흐름이에요.'], baseIds: [], extra: y ? [luckTenGods(chart, y.pillar)] : [] };
+  if (/^month\[\d+\]$/.test(key)) return { terms: ['월운: 절기(절입 시각)로 나눈 달의 간지예요. 절입일부터 다음 절입 전날까지를 한 달로 봐요.'], baseIds: [], extra: [] };
+  if (/^year\[\d+\]$/.test(key)) return { terms: ['연운(세운): 그해의 간지예요. 입춘부터 그해로 봐요.', '대운: 10년마다 바뀌는 큰 흐름이에요.'], baseIds: [], extra: [] };
+  return { terms: [], baseIds: [], extra: [] };
 }
 
 function detailOf(chart: SajuChart, key: string, cited: readonly string[], byId: ReadonlyMap<string, Evidence>, v: Voice): string[] {
@@ -356,8 +387,11 @@ export function buildEvidenceItems(
   chart: SajuChart,
   byId: ReadonlyMap<string, Evidence>,
   sentences: readonly CitingSentence[],
-  /** 아이 리포트(D-045): 사실 문장에서 "나" 대신 "아이"로 부른다. angles: 풀이 각도(D-047, 있으면 뜻 전체를 보여 준다) */
-  opts: { child?: boolean; angles?: ReportAngles } = {},
+  /**
+   * 아이 리포트(D-045): 사실 문장에서 "나" 대신 "아이"로 부른다. angles: 풀이 각도(D-047, 있으면 뜻 전체를 보여 준다).
+   * periods: 월별·10년 흐름 사실(D-052, 있으면 month[i]·year[i]를 쉬운 문장으로)
+   */
+  opts: { child?: boolean; angles?: ReportAngles; periods?: PeriodFactsInput } = {},
 ): { items: EvidenceItem[]; numberOf: Map<string, number> } {
   const voice = opts.child ? CHILD_VOICE : ADULT_VOICE;
   const slots = new Map<string, Slot & { firstSeen: number; ids: string[] }>();
@@ -383,7 +417,7 @@ export function buildEvidenceItems(
       id: s.key,
       ids: s.ids,
       group: s.group,
-      content: plainTextOf(chart, s.key, voice) || byId.get(s.ids[0]!)!.content,
+      content: plainTextOf(chart, s.key, voice, opts.periods) || byId.get(s.ids[0]!)!.content,
       detail: detailOf(chart, s.key, s.ids, byId, voice),
       chartRefs: chartRefsOf(chart, s.key, s.ids, byId),
       usedBy,

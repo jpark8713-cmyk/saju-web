@@ -28,15 +28,16 @@ export function josa(word: string, kind: keyof typeof JOSA): string {
 
 // ---- 사실 목록 ----
 
-/** 타고난 사실(나) / 시기·흐름에 대한 사실 */
-export type EvidenceGroupId = 'natal' | 'luck';
+/** 타고난 사실(나) / 시기·흐름에 대한 사실 / 그달·그해에 대한 사실(월별·10년 흐름, D-052) */
+export type EvidenceGroupId = 'natal' | 'luck' | 'period';
 
 export const EVIDENCE_GROUP_TITLES: Readonly<Record<EvidenceGroupId, string>> = Object.freeze({
   natal: '타고난 나에 대한 사실',
   luck: '시기·흐름에 대한 사실',
+  period: '그달·그해에 대한 사실',
 });
 
-export const EVIDENCE_GROUP_ORDER: readonly EvidenceGroupId[] = ['natal', 'luck'];
+export const EVIDENCE_GROUP_ORDER: readonly EvidenceGroupId[] = ['natal', 'luck', 'period'];
 
 /** 이 사실을 인용한 풀이 문장 */
 export interface EvidenceUse {
