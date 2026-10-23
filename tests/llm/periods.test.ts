@@ -30,19 +30,21 @@ const gen = (s: ReturnType<typeof setup>, transport: FakeTransport, extra: Recor
   generateReport({ chart: s.chart, evidence: s.evidence, topicIds: ['wealth'], referenceYear: SAMPLE_REFERENCE_YEAR, transport, moderator, asOf: SAMPLE_AS_OF, ...extra });
 
 describe('생성 구조', () => {
-  it('어른: 월별 12칸 × 2문장, 10년 10칸 × 2문장, 호출 2개 추가, 월·연 문장도 안전 검수를 받는다', async () => {
+  it('어른(C안): 월별 12칸 × 1문장, 10년 8칸(올해·내년 빼고) × 1문장, 호출 2개 추가, 월·연 문장도 안전 검수를 받는다', async () => {
     const t = new FakeTransport(validResponder(adult.indices));
     const m = new FakeModerator();
     const r = await gen(adult, t, {}, m);
     expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'decade', 'monthly', 'topic:wealth']);
     expect(r.body.periods!.months!.map((n) => n.sentences.length)).toEqual(Array(L.monthCount).fill(L.monthSentences));
-    expect(r.body.periods!.years.map((n) => n.sentences.length)).toEqual(Array(L.yearCount).fill(L.yearSentences));
+    expect(r.body.periods!.years.map((n) => n.sentences.length)).toEqual(Array(L.yearCount - L.yearAiFrom).fill(L.yearSentences));
+    // D-052 3단계: 10년 흐름 AI 문장은 year[2]부터(올해·내년은 코드 사실 줄)
+    expect(r.body.periods!.years.map((n) => n.index)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
     expect(r.body.periods!.seasons).toBeUndefined();
     expect(r.body.periods!.asOf).toBe(SAMPLE_AS_OF.toISOString());
     expect(r.periodEvidence.map((e) => e.id)).toEqual([...Array.from({ length: 12 }, (_, i) => `month[${i}]`), ...Array.from({ length: 10 }, (_, i) => `year[${i}]`)]);
-    expect(m.reviewed.flat().filter((x) => x.path.startsWith('months[') || x.path.startsWith('years['))).toHaveLength(12 * 2 + 10 * 2);
-    // 요청 문장 수(대체 전): 총평 2 + 성향 5 + 대운 2×3 + 올해·내년 2×2 + 주제 5 + 월별 24 + 10년 20
-    expect(r.body.requestedSentences).toBe(2 + 5 + 6 + 4 + 5 + 24 + 20);
+    expect(m.reviewed.flat().filter((x) => x.path.startsWith('months[') || x.path.startsWith('years['))).toHaveLength(12 + 8);
+    // 요청 문장 수(대체 전): 총평 2 + 성향 5 + 대운 2×3 + 올해·내년 2×2 + 주제 5 + 월별 12 + 10년 8
+    expect(r.body.requestedSentences).toBe(2 + 5 + 6 + 4 + 5 + 12 + 8);
     expect(r.body.templatedSentences).toBeUndefined();
   });
   it('아이(만 2세): 계절 4묶음 × 2문장 + 10년 × 1문장, 호출 1개(월별·10년 호출 없음)', async () => {
@@ -50,7 +52,7 @@ describe('생성 구조', () => {
     const r = await gen(child, t);
     expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'periods:child', 'topic:wealth']);
     expect(r.body.periods!.seasons!.map((n) => n.sentences.length)).toEqual([2, 2, 2, 2]);
-    expect(r.body.periods!.years.map((n) => n.sentences.length)).toEqual(Array(10).fill(1));
+    expect(r.body.periods!.years.map((n) => n.sentences.length)).toEqual(Array(8).fill(1));
     expect(r.body.periods!.months).toBeUndefined();
     const msg = t.requests.find((q) => q.label === 'periods:child')!.user;
     expect(msg).toContain('## 읽는 사람: 아이를 키우는 부모');
@@ -87,13 +89,13 @@ describe('월·연 칸의 근거에 없는 구체 장면(하드, 뜻 묶음)', (
     const t = new FakeTransport((req, call) => {
       const r = ok(req, call) as { body: any };
       if (req.label !== 'monthly') return r;
-      r.body.periods[3].sentences[1].text = '이번 달 모임에 나가 보세요.';
+      r.body.periods[3].sentences[0].text = '이번 달 모임에 나가 보세요.';
       return r;
     }, () => 0, 'raw');
     const r = await gen(adult, t);
     const facts = buildPeriodEvidence(adult.chart, SAMPLE_AS_OF, SAMPLE_REFERENCE_YEAR);
-    expect(r.body.periods!.months![3]!.sentences[1]).toEqual(fallbackMonths(adult.chart, facts.months).periods[3]!.sentences[1]);
-    expect(r.body.periods!.months![3]!.sentences[0]!.text).toContain('번째 칸은');
+    expect(r.body.periods!.months![3]!.sentences[0]).toEqual(fallbackMonths(adult.chart, facts.months).periods[3]!.sentences[0]);
+    expect(r.body.periods!.months![4]!.sentences[0]!.text).toContain('번째 칸은');
     expect(r.body).toMatchObject({ templated: ['monthly'], templatedSentences: 1 });
     expect(r.attempts.filter((a) => a.label === 'monthly' && a.violations.some((v) => v.detail.includes('구체 장면')))).toHaveLength(3);
   });
@@ -109,20 +111,21 @@ describe('월·연 칸 검사', () => {
     const y = buildPeriodEvidence(adult.chart, SAMPLE_AS_OF, SAMPLE_REFERENCE_YEAR).years[3]!;
     expect(codes(`${y.year}년에는 만 ${y.ageAfterBirthday}세가 돼요.`, ['year[3]'])).toEqual([]);
   });
-  it('첫 문장에 그달의 뜻·관계가 없으면 다시 쓰게 하고(soft), 첫머리 틀이 4칸 넘게 같으면 한 번만 다시 쓰게 한다', async () => {
+  it('어른 C안: 달 이름으로 시작하면 첫 시도에서 한 번만 다시 쓰게 하고, 그래도 같으면 통과시킨다', async () => {
     const ok = validResponder(adult.indices);
     let calls = 0;
     const t = new FakeTransport((req, n) => {
       const r = ok(req, n) as { body: any };
       if (req.label !== 'monthly') return r;
       calls++;
-      // 매번 모든 달의 첫 문장을 같은 틀로(뜻 묶음은 넣는다)
+      // 매번 모든 달의 문장을 달 이름으로 시작(뜻 묶음은 넣는다)
       r.body.periods.forEach((p: any) => { p.sentences[0].text = p.sentences[0].text.replace(/^\d+번째 칸은/u, '이 달은'); });
       return r;
     }, () => 0, 'raw');
     const r = await gen(adult, t);
     expect(calls).toBe(2);
-    expect(r.attempts.filter((a) => a.label === 'monthly')[0]!.violations.map((v) => v.code)).toContain('repeatedWord');
+    expect(r.attempts.filter((a) => a.label === 'monthly')[0]!.violations.map((v) => v.code)).toContain('openerFrame');
+    expect(r.body.templated).toBeUndefined();
   });
 });
 
@@ -147,9 +150,9 @@ describe('진행 상태·시간 상한·운영자 알림', () => {
   // 리뷰 지적(HIGH): 칸을 더 돌려주면 범위 밖 칸의 사실을 읽다가 주문이 실패했다
   for (const [name, s, label, key, count] of [
     ['월별 13칸', adult, 'monthly', 'periods', L.monthCount],
-    ['10년 11칸', adult, 'decade', 'periods', L.yearCount],
+    ['10년 9칸', adult, 'decade', 'periods', L.yearCount - L.yearAiFrom],
     ['아이 계절 5묶음', child, 'periods:child', 'seasons', L.seasonCount],
-    ['아이 10년 11칸', child, 'periods:child', 'years', L.yearCount],
+    ['아이 10년 9칸', child, 'periods:child', 'years', L.yearCount - L.yearAiFrom],
   ] as const) {
     it(`칸 수 초과(${name})는 그 칸 전체를 사실 문장으로 바꾸고 주문은 끝난다`, async () => {
       const ok = validResponder(s.indices);
@@ -172,10 +175,10 @@ describe('진행 상태·시간 상한·운영자 알림', () => {
     const t = new FakeTransport((req, n) => (req.label === 'decade' ? { text: '{"broken": true}' } : ok(req, n)), () => 0, 'raw');
     const r = await gen(adult, t);
     const facts = buildPeriodEvidence(adult.chart, SAMPLE_AS_OF, SAMPLE_REFERENCE_YEAR);
-    expect(r.body.periods!.years).toEqual(fallbackYears(adult.chart, facts.years).periods);
+    expect(r.body.periods!.years).toEqual(fallbackYears(adult.chart, facts.years.slice(L.yearAiFrom)).periods);
   });
-  for (const [broken, warn] of [[6, false], [7, true]] as const) {
-    it(`주문 단계: 요청 66문장 중 ${broken}문장이 사실 문장으로 바뀌면 ${warn ? '운영자 알림(10% 초과)' : '기록 로그만'}`, async () => {
+  for (const [broken, warn] of [[4, false], [5, true]] as const) {
+    it(`주문 단계: 요청 42문장 중 ${broken}문장이 사실 문장으로 바뀌면 ${warn ? '운영자 알림(10% 초과)' : '기록 로그만'}`, async () => {
       const store = new MemoryStore();
       const o = await paidOrder(store, { topicIds: ['wealth'] });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -184,7 +187,7 @@ describe('진행 상태·시간 상한·운영자 알림', () => {
         transport: new FakeTransport((req, n) => {
           const order = (/daewoonIndex ([\d, ]+) 순서로/u.exec(req.user)?.[1] ?? '0, 1').split(',').map((x) => Number(x.trim()));
           const r = validResponder(order)(req, n) as { body: any };
-          if (req.label === 'monthly') for (let i = 0; i < broken; i++) r.body.periods[i].sentences[1].evidenceIds = [];
+          if (req.label === 'monthly') for (let i = 0; i < broken; i++) r.body.periods[i].sentences[0].evidenceIds = [];
           return r;
         }, () => 0, 'raw'),
         moderator: new FakeModerator(),
@@ -192,11 +195,11 @@ describe('진행 상태·시간 상한·운영자 알림', () => {
       await (await startGeneration(store, o.orderId, o.accessToken, runtime)).job;
       const report = (await store.getReport(o.orderId))!;
       expect((await store.getOrder(o.orderId))!.status).toBe('done');
-      expect(report.body).toMatchObject({ requestedSentences: 66, templatedSentences: broken });
+      expect(report.body).toMatchObject({ requestedSentences: 42, templatedSentences: broken });
       expect(report.evidence.some((e) => e.id === 'month[0]')).toBe(true);
       const alert = warnSpy.mock.calls.some((c) => String(c[0]).startsWith('[생성 알림]'));
       expect(alert).toBe(warn);
-      if (!warn) expect(info.mock.calls.map((c) => String(c[0])).find((m) => m.startsWith('[생성]'))).toContain(`${broken}개 / 요청 66개`);
+      if (!warn) expect(info.mock.calls.map((c) => String(c[0])).find((m) => m.startsWith('[생성]'))).toContain(`${broken}개 / 요청 42개`);
     });
   }
   it('주문 단계: 진행 상태를 주문에 남기고, 완성되면 상태 조회의 진행 표시는 빈 목록', async () => {

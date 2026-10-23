@@ -28,7 +28,7 @@ describe('generateReport + AI 검수', () => {
     expect(texts.length).toBe(
       L.summaryAiSentences + L.traitsSentences + 2 * L.daewoonNoteSentences + 2 * L.yearlySentences + L.topicSentences +
         // D-052: 월별·10년 흐름도 안전 검수를 받는다
-        L.monthCount * L.monthSentences + L.yearCount * L.yearSentences,
+        L.monthCount * L.monthSentences + (L.yearCount - L.yearAiFrom) * L.yearSentences,
     );
     for (const t of summaryTemplate(chart)) expect(texts).not.toContain(t.text);
   });

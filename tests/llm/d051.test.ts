@@ -56,7 +56,7 @@ describe('2) 각도 옮겨 쓰기·합·충 얇은 끝맺음은 다시 쓰지 �
     });
     const r = await generateReport({ chart: adultChart, evidence: buildEvidence(adultChart), topicIds: [], referenceYear: SAMPLE_REFERENCE_YEAR, transport: t, moderator: new FakeModerator(), asOf: SAMPLE_AS_OF });
     expect(t.requests.filter((q) => q.label === 'base')).toHaveLength(1);
-    expect(r.body.observed).toEqual({ angleCopy: 1, thinRelation: 1 });
+    expect(r.body.observed).toMatchObject({ angleCopy: 1, thinRelation: 1 });
   });
 });
 

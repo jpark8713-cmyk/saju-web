@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { TOPICS, type TenGodGroupId } from '../config/topics';
 import { ELEMENTS, ELEMENT_PLAIN, TEN_GOD_GROUPS } from '../engine/constants';
 import type { SajuChart } from '../engine/types';
-import { ELEMENT_ANGLES, GROUP_ANGLES, RELATION_ANGLES, childGroupAngles, type Angle, type ReportAngles } from '../report/angleTable';
+import { ELEMENT_ANGLES, GROUP_ANGLES, RELATION_ANGLES, RELATION_ANGLE_MEANINGS, childGroupAngles, type Angle, type ReportAngles } from '../report/angleTable';
 import type { Audience } from '../report/audience';
 
 const GROUP_IDS = TEN_GOD_GROUPS.map((g) => g.id as TenGodGroupId);
@@ -72,18 +72,29 @@ export function slotLabel(slot: string): string {
  * 프롬프트에 넣을 칸별 각도 안내. sections: 이 호출이 쓰는 칸 키와 그 칸을 부르는 이름.
  * D-048: 각도마다 붙여 주던 생활 장면 문구는 넣지 않는다. 모델이 그 문구를 그대로 옮겨 같은 각도를 받은 리포트끼리 문장이 겹쳤다.
  */
-export function angleLines(angles: ReportAngles, sections: readonly { key: string; name: string }[]): string {
+export function angleLines(
+  angles: ReportAngles,
+  sections: readonly { key: string; name: string }[],
+  /**
+   * relationMeaning: 관계 표를 각도 이름 대신 뜻 설명(RELATION_ANGLE_MEANINGS)으로 준다.
+   * omitRelation: 관계 표를 넣지 않는다(D-052 3단계 C안, 월·연 칸: 이름도 뜻 설명도 문장에 그대로 옮겼다)
+   */
+  opts: { relationMeaning?: boolean; omitRelation?: boolean } = {},
+): string {
   const rows = sections.map(({ key, name }) => {
     const m = angles.bySection[key] ?? {};
     const els = ELEMENTS.map((el) => `${ELEMENT_PLAIN[el]}=${m[el]}`);
     const grs = GROUP_IDS.map((g) => `${slotLabel(g)}=${m[g]}`);
-    const rel = (['combine', 'clash'] as const).map((r) => `${slotLabel(r)}=${m[r]}`);
-    return `- ${name}: [오행 표] ${els.join(', ')} / [묶음 표] ${grs.join(', ')} / [관계 표] ${rel.join(', ')}`;
+    const relName = (r: 'combine' | 'clash') => (opts.relationMeaning ? (RELATION_ANGLE_MEANINGS[m[r] ?? ''] ?? m[r]) : m[r]);
+    const rel = (['combine', 'clash'] as const).map((r) => `${slotLabel(r)}=${relName(r)}`);
+    return `- ${name}: [오행 표] ${els.join(', ')} / [묶음 표] ${grs.join(', ')}${opts.omitRelation ? '' : ` / [관계 표] ${rel.join(', ')}`}`;
   });
   return [
     '## 칸별 풀이 각도',
     '이 칸에서 그 기운·묶음·관계를 풀 때 아래 각도가 가리키는 쪽으로 풉니다. 각도는 방향만 알려 줍니다. 각도 이름을 문장에 그대로 옮기지 않고, 이 사람의 글자·개수·관계와 엮어 새 말로 씁니다.',
-    '[오행 표]는 기운 개수·대운 문장에, [묶음 표]는 "~을 뜻하는 글자" 문장(올해·내년 칸에서 그해 글자의 뜻을 말하는 문장 포함)에, [관계 표]는 서로 묶이는·부딪치는 관계를 말하는 문장에만 씁니다. 한 문장에 두 표의 각도를 섞지 않습니다.',
+    opts.omitRelation
+      ? '[오행 표]는 기운 개수 문장에, [묶음 표]는 "~을 뜻하는 글자" 문장에만 씁니다. 한 문장에 두 표의 각도를 섞지 않습니다.'
+      : '[오행 표]는 기운 개수·대운 문장에, [묶음 표]는 "~을 뜻하는 글자" 문장(올해·내년 칸에서 그해 글자의 뜻을 말하는 문장 포함)에, [관계 표]는 서로 묶이는·부딪치는 관계를 말하는 문장에만 씁니다. 한 문장에 두 표의 각도를 섞지 않습니다.',
     ...rows,
   ].join('\n');
 }

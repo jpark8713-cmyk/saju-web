@@ -111,22 +111,30 @@ function groupIn(user: string, id: string): string {
 }
 
 /** 칸마다 그 칸 근거를 인용하고 첫 문장에 그 칸의 뜻 묶음을 쓰는 정상 응답(D-052). 첫머리는 칸마다 다르다 */
-function periodNotes(user: string, idOf: (i: number) => string, count: number, per: number): PeriodNote[] {
-  return Array.from({ length: count }, (_, i) => ({
+// D-052 3단계: 문장이 짧아 같은 글귀(5어절)·첫머리 틀 검사에 걸리지 않는다(칸 번호가 첫 어절)
+function periodNotes(user: string, idOf: (i: number) => string, indices: readonly number[], per: number): PeriodNote[] {
+  return indices.map((i) => ({
     index: i,
     sentences: Array.from({ length: per }, (_, j) => ({
-      text: j === 0 ? `${i + 1}번째 칸은 그 글자가 ${groupIn(user, idOf(i))}의 뜻이라 바탕으로 쓴 문장이에요.` : `${i + 1}번째 칸의 ${j + 1}번째 문장이에요.`,
+      text: j === 0 ? `${i + 1}번째 칸은 그 글자가 ${groupIn(user, idOf(i))}의 뜻이에요.` : `${i + 1}번째 칸의 ${j + 1}번째 문장이에요.`,
       evidenceIds: [idOf(i)],
     })),
   }));
+}
+
+const range = (from: number, to: number) => Array.from({ length: to - from }, (_, k) => from + k);
+/** 10년 흐름에서 쓸 해(프롬프트의 "index 2, 3, … 차례로"). 없으면 올해·내년을 뺀 해 */
+function yearIndicesIn(user: string, key: 'periods' | 'years'): number[] {
+  const m = new RegExp(`${key}: index ([\\d, ]+) 차례로`, 'u').exec(user);
+  return m ? m[1]!.split(',').map((x) => Number(x.trim())) : range(REPORT_LAYOUT.yearAiFrom, REPORT_LAYOUT.yearCount);
 }
 
 /** 월별(month) 또는 10년(year) 흐름 정상 응답 */
 export function validPeriods(user: string, kind: 'month' | 'year'): PeriodDraft {
   const L = REPORT_LAYOUT;
   return kind === 'month'
-    ? { periods: periodNotes(user, (i) => `month[${i}]`, L.monthCount, L.monthSentences) }
-    : { periods: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.yearSentences) };
+    ? { periods: periodNotes(user, (i) => `month[${i}]`, range(0, L.monthCount), L.monthSentences) }
+    : { periods: periodNotes(user, (i) => `year[${i}]`, yearIndicesIn(user, 'periods'), L.yearSentences) };
 }
 
 /** 아이 부모 관점 요약 정상 응답: 묶음마다 그 묶음 첫 달 근거 */
@@ -134,17 +142,18 @@ export function validChildPeriods(user: string): ChildPeriodDraft {
   const L = REPORT_LAYOUT;
   const firsts = [...user.matchAll(/묶음 (\d+)\([^)]*\): month\[(\d+)\]/gu)].map((m) => Number(m[2]));
   return {
-    seasons: periodNotes(user, (i) => `month[${firsts[i] ?? i * 3}]`, L.seasonCount, L.seasonSentences),
-    years: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.childYearSentences),
+    seasons: periodNotes(user, (i) => `month[${firsts[i] ?? i * 3}]`, range(0, L.seasonCount), L.seasonSentences),
+    years: periodNotes(user, (i) => `year[${i}]`, yearIndicesIn(user, 'years'), L.childYearSentences),
   };
 }
 
 /** 요청 종류에 맞는 정상 응답을 돌려주는 가짜 모델 */
 export function validResponder(daewoonIndices: number[]): Responder {
   return (req) => {
-    if (req.label === 'monthly') return { body: validPeriods(req.user, 'month') };
-    if (req.label === 'decade') return { body: validPeriods(req.user, 'year') };
-    if (req.label === 'periods:child') return { body: validChildPeriods(req.user) };
+    const label = req.label;
+    if (label === 'monthly') return { body: validPeriods(req.user, 'month') };
+    if (label === 'decade') return { body: validPeriods(req.user, 'year') };
+    if (label === 'periods:child') return { body: validChildPeriods(req.user) };
     const ids = evidenceIdsIn(req.user).filter((id) => id === 'dayMaster' || id.startsWith('elements.') || id.startsWith('tenGodGroup.'));
     return { body: req.label === 'base' ? validBase(daewoonIndices, ids, [seunGroupIn(req.user, 0), seunGroupIn(req.user, 1)]) : validTopic(ids) };
   };

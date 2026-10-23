@@ -296,7 +296,10 @@ function patchNotes(notes: readonly PeriodNote[], tpl: readonly PeriodNote[], pa
     } else if (whole) {
       const i = Number(whole[1]);
       if (!tpl[i]) return null;
-      replaced += Math.max(next[i]?.sentences.length ?? 0, tpl[i]!.sentences.length);
+      // 이미 사실 문장으로 바꾼 문장은 다시 세지 않는다(C안 1문장 칸: 문장 위반 + 칸 인용 위반이 함께 나와 두 번 셌다)
+      const cur = next[i]?.sentences ?? [];
+      const t = tpl[i]!.sentences;
+      replaced += t.filter((x, k) => cur[k] !== x).length + Math.max(0, cur.length - t.length);
       next[i] = { ...tpl[i]!, sentences: [...tpl[i]!.sentences] };
     } else {
       return null;

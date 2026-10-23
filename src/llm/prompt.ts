@@ -243,6 +243,27 @@ function periodRules(kind: 'month' | 'year' | 'child'): string[] {
     `- 둘째 문장은 그 뜻에 맞춘 생활 제안입니다. 같은 행동 제안은 두 ${unit}까지만 쓰고, ${unit}마다 첫머리를 다르게 시작합니다.`,
     '- 근거에 없는 구체 장면(모임·회식·여행·휴가·출장·면접·입사·계약·대출·이사·결혼식 같은 일정)을 지어내지 않습니다. 장면 없이 그 뜻에 맞춘 마음가짐·생활 습관으로 씁니다.',
     '- 달·해 이름, 날짜, 나이는 근거에 적힌 표기 그대로 씁니다.',
+    // D-052 3단계: 실측에서 같은 글귀·"곁에서"가 칸마다 되풀이됐다
+    `- 다른 ${unit}에 쓴 글귀(다섯 어절 안팎)를 되풀이하지 않습니다. "곁에서"는 이 칸 전체에서 한 번만 씁니다.`,
+    '- 다른 달·해와 견주는 시간 서술(처음 들어오는, 처음으로, 비로소, 새로 들어오는, 다시 돌아오는)을 쓰지 않습니다.',
+  ];
+}
+
+/**
+ * 어른 월별·10년 흐름(D-052 3단계 C안): 화면에 코드가 그 칸의 사실 줄(간지·윗글자와 아랫글자의 뜻·주된 관계)을 먼저 보여 주고,
+ * AI는 칸마다 한 문장만 쓴다
+ */
+function adultPeriodRules(unit: '달' | '해'): string[] {
+  return [
+    `- 화면에는 ${unit}마다 코드가 쓴 사실 줄(간지, 윗글자·아랫글자의 뜻, 원국 글자와의 주된 관계)이 먼저 나옵니다. 문장은 그 사실을 되풀이하지 않습니다.`,
+    `- 칸마다 한 문장: 그 ${unit}의 근거를 인용하고, 그 ${unit} 사실 줄의 내용(그 ${unit} 글자의 뜻 묶음 또는 원국 글자와의 관계) 중 하나를 꼭 담아, 그것이 이 사람에게 무엇을 뜻하는지와 생활 제안 하나를 한 문장에 씁니다.`,
+    '- 원국 글자와의 관계(같은 글자·묶이는·부딪치는 관계)를 담은 문장은 모습·경향으로 끝내고 행동 제안으로 끝내지 않습니다. 제안은 그 글자의 뜻 묶음을 담은 문장에서 합니다.',
+    `- 원국의 뜻 묶음 개수("나를 뺀 7글자 중 ○○을 뜻하는 글자가 N개")로 시작하는 문장은 세 ${unit}까지만 씁니다.`,
+    `- ${unit} 이름(○○○○년 ○월, ○○○○년, 이${unit}, 간지)으로 문장을 시작하지 않습니다. 문장 첫머리 틀은 같은 것을 세 문장까지만 씁니다.`,
+    '- 근거에 없는 구체 장면(모임·회식·여행·휴가·출장·면접·입사·계약·대출·이사·결혼식 같은 일정)을 지어내지 않습니다.',
+    `- 다른 ${unit}과 견주는 시간 서술(처음 들어오는, 처음으로, 비로소, 새로 들어오는, 다시 돌아오는)을 쓰지 않습니다. 앞뒤 ${unit}의 사실은 이 칸 근거에 없습니다.`,
+    '- 날짜·나이는 근거에 적힌 표기 그대로 씁니다.',
+    `- 다른 ${unit}에 쓴 글귀(다섯 어절 안팎)를 되풀이하지 않습니다. "곁에서"는 이 칸 전체에서 한 번만 씁니다.`,
   ];
 }
 
@@ -258,15 +279,21 @@ export function monthlyUserMessage(args: {
     '',
     '## 작성할 칸: 월별 흐름',
     `- periods: index 0부터 ${args.monthCount - 1}까지 차례로 ${args.monthCount}칸, 칸마다 ${REPORT_LAYOUT.monthSentences}문장. index i는 month[i] 근거의 절기 달입니다.`,
-    ...periodRules('month'),
+    ...adultPeriodRules('달'),
     ...(args.angleBlock ? ['', args.angleBlock] : []),
   ].join('\n') + retryNote(args.violations ?? []);
 }
 
-/** 어른 10년 흐름: 해 10칸 × 2문장 */
+/** 10년 흐름의 첫머리 규칙(D-052 3단계): 실측에서 10문장이 모두 "○○○○년은 ○○의 해로, …"로 시작했다 */
+const DECADE_OPENER_RULE = '- 문장 첫머리 틀(연도·간지·나이를 빼고 본 앞 세 어절, 예: "○○○○년은 ○○의 해로")은 같은 틀을 세 문장까지만 씁니다. 그해 글자의 뜻, 관계, 나이, 큰 흐름 중 하나로 다르게 시작합니다.';
+/** 10년 흐름의 올해·내년(D-052 3단계): 화면에서 올해·내년 칸을 가리키는 사실 줄로 보여 준다 */
+const DECADE_SKIP_NOTE = '- 올해와 내년은 위 올해·내년 칸에서 따로 풀기 때문에 이 칸에서는 쓰지 않습니다.';
+
+/** 어른 10년 흐름: 올해·내년을 뺀 해(year[2]~) × 2문장 */
 export function decadeUserMessage(args: {
   evidence: readonly Evidence[];
-  yearCount: number;
+  /** 쓸 해의 index(year[i]) */
+  indices: readonly number[];
   violations?: readonly Violation[];
   angleBlock?: string;
 }): string {
@@ -274,9 +301,10 @@ export function decadeUserMessage(args: {
     evidenceBlock(args.evidence),
     '',
     '## 작성할 칸: 10년 흐름',
-    `- periods: index 0부터 ${args.yearCount - 1}까지 차례로 ${args.yearCount}칸, 칸마다 ${REPORT_LAYOUT.yearSentences}문장. index i는 year[i] 근거의 해입니다.`,
+    `- periods: index ${args.indices.join(', ')} 차례로 ${args.indices.length}칸, 칸마다 ${REPORT_LAYOUT.yearSentences}문장. index i는 year[i] 근거의 해입니다.`,
+    DECADE_SKIP_NOTE,
     '- 근거에 큰 흐름(대운)이 바뀐다고 적힌 해는 그 전환을 한 문장에 씁니다.',
-    ...periodRules('year'),
+    ...adultPeriodRules('해'),
     ...(args.angleBlock ? ['', args.angleBlock] : []),
   ].join('\n') + retryNote(args.violations ?? []);
 }
@@ -286,6 +314,7 @@ export function childPeriodUserMessage(args: {
   evidence: readonly Evidence[];
   audience: Audience;
   seasons: readonly { index: number; monthIndices: readonly number[]; name: string }[];
+  /** 쓸 해(올해·내년을 뺀 year[2]~) */
   years: readonly { index: number; ageAfterBirthday: number }[];
   violations?: readonly Violation[];
   angleBlock?: string;
@@ -298,7 +327,9 @@ export function childPeriodUserMessage(args: {
     '## 작성할 칸: 계절별 흐름과 10년 흐름(부모가 읽는 요약)',
     `- seasons: index 0부터 ${args.seasons.length - 1}까지 차례로, 묶음마다 ${REPORT_LAYOUT.seasonSentences}문장. 문장마다 그 묶음 달 근거 중 하나 이상을 인용합니다. 그 계절에 아이에게 보일 수 있는 모습과 부모가 챙길 일로 씁니다.`,
     ...args.seasons.map((g) => `  - 묶음 ${g.index}(${g.name}): ${g.monthIndices.map((i) => `month[${i}]`).join(', ')}`),
-    `- years: index 0부터 ${args.years.length - 1}까지 차례로, 해마다 ${REPORT_LAYOUT.childYearSentences}문장. index i는 year[i] 근거의 해이고, 그해 아이 나이(근거의 만 나이)에 맞춰 씁니다.`,
+    `- years: index ${args.years.map((y) => y.index).join(', ')} 차례로, 해마다 ${REPORT_LAYOUT.childYearSentences}문장. index i는 year[i] 근거의 해이고, 그해 아이 나이(근거의 만 나이)에 맞춰 씁니다.`,
+    DECADE_SKIP_NOTE,
+    DECADE_OPENER_RULE,
     ...args.years.filter((y) => y.ageAfterBirthday >= 13).map((y) => `  - year[${y.index}]: 만 ${y.ageAfterBirthday}세가 되는 해 → 부모가 해 줄 일이 아니라 그 나이대 문장으로, "아이"·"나" 없이 씁니다.`),
     ...periodRules('child'),
     ...(args.angleBlock ? ['', args.angleBlock] : []),

@@ -41,6 +41,12 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   await expect(page.locator('[data-section="months"]').getByTestId('period-cluster')).toHaveCount(4);
   await expect(page.locator('[data-section="years"] [data-period-group]')).toHaveCount(10);
   await expect(page.locator('[data-section="years"]').getByTestId('period-flow').first()).toContainText('큰 흐름:');
+  // D-052 3단계: 10년 흐름의 올해·내년은 사실 줄 + 올해·내년 칸 링크, 월별 계절 머리는 날짜 범위와 절기
+  // C안: 어른 월별·10년은 달·해마다 사실 줄(10년의 올해·내년만 링크)
+  await expect(page.locator('[data-section="years"]').getByTestId('period-fact')).toHaveCount(10);
+  await expect(page.locator('[data-section="months"]').getByTestId('period-fact')).toHaveCount(12);
+  await expect(page.locator('[data-section="years"] .period-fact a[href="#section-yearly"]')).toHaveCount(2);
+  await expect(page.locator('[data-section="months"]').getByTestId('period-cluster').first()).toHaveText(/^\d{4}년 \d{1,2}\/\d{1,2} ~ \d{4}년 \d{1,2}\/\d{1,2} \(.+\)$/);
   await expect(page.locator('[data-section="yearly"]').getByTestId('section-note')).toContainText('월별 흐름');
   await page.locator('[data-section="yearly"] a[href="#section-years"]').click();
   await expect(page.locator('#section-years')).toBeInViewport();
@@ -271,6 +277,8 @@ test('PDF: 각주 번호와 사실 목록이 화면과 일치하고 Noto 글꼴�
   expect(breaks).toEqual(['page', 'page', 'page']);
   // PDF에는 링크 대신 안내 문구만
   await expect(print.locator('[data-section="yearly"] .period-link')).toHaveCount(0);
+  await expect(print.locator('[data-section="years"] .period-link')).toHaveCount(0);
+  await expect(print.locator('[data-section="years"]').getByTestId('period-fact').first()).toContainText('올해·내년 흐름 칸 참고');
   await ctx.close();
 });
 

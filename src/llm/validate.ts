@@ -360,25 +360,28 @@ export interface PeriodFacts {
 }
 
 /**
- * 칸 구조(하드): 칸 수, index 차례, 칸마다 문장 수·문장 검사(rulesOf(i)), 칸마다 그 칸 근거를 한 번 이상 인용.
- * prefix: 위반 위치의 앞부분(months·years·seasons). 위치는 "months[3][1]"처럼 칸·문장 번호다
+ * 칸 구조(하드): 칸 수, index 차례, 칸마다 문장 수·문장 검사(rulesOf(index)), 칸마다 그 칸 근거를 한 번 이상 인용.
+ * expected.indices: 칸마다 와야 할 index(10년 흐름은 올해·내년을 빼고 2부터). rulesOf·factsOf는 그 index로 부른다.
+ * prefix: 위반 위치의 앞부분(months·years·seasons). 위치는 "years[3][1]"처럼 초안 안의 칸 순번·문장 번호다
  */
 export function validatePeriodNotes(
   notes: readonly { index: number; sentences: readonly ReportSentence[] }[],
   prefix: string,
-  expected: { count: number; sentences: number },
-  rulesOf: (i: number) => PreparedRules,
-  factsOf: (i: number) => PeriodFacts,
+  expected: { indices: readonly number[]; sentences: number },
+  rulesOf: (index: number) => PreparedRules,
+  factsOf: (index: number) => PeriodFacts,
 ): Violation[] {
   const out: Violation[] = [];
-  if (notes.length !== expected.count) out.push({ code: 'sentenceCount', path: prefix, detail: `${notes.length}칸 (필요 ${expected.count}칸)` });
+  const count = expected.indices.length;
+  if (notes.length !== count) out.push({ code: 'sentenceCount', path: prefix, detail: `${notes.length}칸 (필요 ${count}칸)` });
   notes.forEach((n, i) => {
     // 남는 칸은 칸 수 위반 하나로 충분하다(그 칸의 사실이 없어 문장 검사를 하지 않는다)
-    if (i >= expected.count) return;
+    if (i >= count) return;
+    const want = expected.indices[i]!;
     const path = `${prefix}[${i}]`;
-    if (n.index !== i) out.push({ code: 'wrongDaewoon', path, detail: `index ${n.index} (필요 ${i})` });
-    out.push(...validateSection(n.sentences, path, expected.sentences, rulesOf(i)));
-    const ids = factsOf(i).ids;
+    if (n.index !== want) out.push({ code: 'wrongDaewoon', path, detail: `index ${n.index} (필요 ${want})` });
+    out.push(...validateSection(n.sentences, path, expected.sentences, rulesOf(want)));
+    const ids = factsOf(want).ids;
     if (!n.sentences.some((s) => s.evidenceIds.some((id) => ids.includes(id)))) {
       out.push({ code: 'wrongDaewoon', path, detail: `${ids.join(' 또는 ')}를 인용한 문장이 없음` });
     }
@@ -393,12 +396,14 @@ export function validatePeriodNotes(
 export function validatePeriodLead(
   notes: readonly { sentences: readonly ReportSentence[] }[],
   prefix: string,
-  factsOf: (i: number) => PeriodFacts,
+  factsOf: (index: number) => PeriodFacts,
+  /** 칸 순번 → 그 칸의 index(없으면 순번 그대로) */
+  indices?: readonly number[],
 ): Violation[] {
   const out: Violation[] = [];
   const squashed = (t: string) => t.replace(/\s*·\s*/gu, '·');
   notes.forEach((n, i) => {
-    const f = factsOf(i);
+    const f = factsOf(indices ? (indices[i] ?? -1) : i);
     const first = n.sentences[0];
     if (first) {
       const t = squashed(first.text);
@@ -440,6 +445,178 @@ export function validateOpenerRepeat(notes: readonly { sentences: readonly Repor
     path: `${prefix}[${xs[0]}][0]`,
     detail: `${xs.length}칸의 첫 문장이 같은 틀("${k} …")로 시작합니다. 칸마다 그 칸 글자의 뜻·관계로 다르게 시작합니다`,
   }));
+}
+
+/** 비교 전에 가리는 사실 표기(조사까지): 간지(한자)·글자(한자)·한자·연도·만 나이·월 */
+const FRAME_MASKS: readonly [RegExp, string][] = [
+  [/[가-힣]{2}\([一-鿿]{2}\)(?:의|은|는|이|가|과|와|을|를|에|로|으로)?/gu, ' G '],
+  [/[가-힣]\([一-鿿]\)(?:의|은|는|이|가|과|와|을|를|에|로|으로)?/gu, ' g '],
+  [/[一-鿿]+/gu, ' H '],
+  [/\d{4}\s?년(?:은|는|에는|에|의|도)?/gu, ' Y '],
+  [/만\s?\d{1,3}\s?(?:세|살)(?:인|이|가|의|에|에는)?/gu, ' A '],
+  [/\d{1,2}\s?월(?:은|는|에는|에|의|도)?/gu, ' M '],
+];
+
+/** 사실 표기를 가린 어절 목록 */
+function maskedWords(text: string): string[] {
+  return FRAME_MASKS.reduce((t, [re, to]) => t.replace(re, to), text).replace(/[,.!?()"“”]/gu, ' ').split(/\s+/u).filter(Boolean);
+}
+
+/**
+ * 뜻 묶음 개수로 시작하는 꼴(D-052 3단계 마감): "나를 뺀 7글자 중 규칙·책임을 뜻하는 글자가 2개 있는 사람이라",
+ * "표현·재능을 뜻하는 글자가 3개나 있어서". 개수·묶음 이름을 가리면 같은 틀이다(C안 실측: 월별 12문장 중 9문장)
+ */
+const COUNT_START_RE = /^\s*(?:나를 ?뺀 ?\d+\s?글자 ?중 ?)?[가-힣]+(?:·[가-힣]+)?(?:을|를) 뜻하는 글자가 (?:내 사주에 |나를 ?뺀 ?\d+\s?글자 ?중 ?)?(?:\d+\s?개|하나도)/u;
+
+/** 문장 첫머리 틀: 사실 표기를 가린 앞 세 어절("Y G 해로"). 뜻 묶음 개수로 시작하는 문장은 모두 한 틀이다 */
+export function openerFrame(text: string): string {
+  if (COUNT_START_RE.test(text)) return '뜻하는 글자가 N개 있는';
+  return maskedWords(text).slice(0, 3).join(' ');
+}
+
+/**
+ * 첫머리 틀 반복(soft, 첫 시도에서만, D-052 3단계): 연도·간지·한자·나이·월을 가린 첫머리 틀이 같은 문장이 limit개를 넘으면 한 번 다시 쓰게 한다.
+ * 10년 흐름에 쓴다(어른 16문장·아이 8문장). 앞 세 낱말만 보던 validateOpenerRepeat는 "2026년은 병오(丙午)의 해로" 꼴을 서로 다르게 봤다
+ */
+export function validateOpenerFrame(sentences: readonly { path: string; text: string }[], limit = 3): Violation[] {
+  const groups = new Map<string, string[]>();
+  for (const s of sentences) {
+    const k = openerFrame(s.text);
+    if (k) groups.set(k, [...(groups.get(k) ?? []), s.path]);
+  }
+  return [...groups].filter(([, ps]) => ps.length > limit).map(([k, ps]) => ({
+    code: 'openerFrame' as const,
+    path: ps[limit]!,
+    detail: `${ps.length}문장이 같은 틀("${k.replace(/\bY\b/gu, '○○○○년').replace(/\bG\b/gu, '간지').replace(/\bA\b/gu, '만 ○세')} …")로 시작합니다(${ps.join(', ')}). 같은 틀은 ${limit}문장까지만 쓰고, 나머지는 그해 글자의 뜻·관계나 나이로 다르게 시작합니다`,
+  }));
+}
+
+/** 같은 글귀 검사에서 빼는 어절: 사실 표기와 근거를 그대로 옮기는 말(태어난 해의 윗글자, 뜻하는 글자, 묶이는 관계 등) */
+const PHRASE_FACT_WORD = /^(?:Y|M|G|g|H|A)$|태어난|윗글자|아랫글자|뜻하는|글자|관계|서로|묶이|부딪|큰|흐름/u;
+
+/**
+ * 칸 사이 같은 글귀(soft, 첫 시도에서만, D-052 3단계): 사실 표기를 뺀 n어절 글귀가 두 문장 이상에 나오면 뒤 문장을 다시 쓰게 한다.
+ * fixedTexts는 고칠 수 없는(이미 정해진) 문장이다: 거기 나온 글귀를 sentences에서 또 쓰면 sentences 쪽을 고친다
+ */
+export function validatePhraseRepeat(sentences: readonly { path: string; text: string }[], fixedTexts: readonly string[] = [], n = 5): Violation[] {
+  return repeatedPhrases(sentences, fixedTexts, n).map((r) => ({
+    code: 'repeatedPhrase' as const,
+    path: r.path,
+    detail: `${r.fromFixed ? '리포트의 다른 칸' : '앞 문장'}에 이미 쓴 글귀("${r.phrase}")를 되풀이했습니다. 이 문장은 다른 말로 씁니다`,
+  }));
+}
+
+/** 되풀이한 글귀: 문장 위치, 글귀, fixedTexts(다른 칸)에 먼저 나왔는지 */
+export function repeatedPhrases(
+  sentences: readonly { path: string; text: string }[],
+  fixedTexts: readonly string[] = [],
+  n = 5,
+): { path: string; phrase: string; fromFixed: boolean }[] {
+  const grams = (text: string) => {
+    const ws = maskedWords(text);
+    const out = new Set<string>();
+    for (let i = 0; i + n <= ws.length; i++) {
+      const g = ws.slice(i, i + n);
+      if (!g.some((w) => PHRASE_FACT_WORD.test(w))) out.add(g.join(' '));
+    }
+    return out;
+  };
+  const fixed = new Set<string>(fixedTexts.flatMap((t) => [...grams(t)]));
+  const seen = new Set<string>();
+  const out: { path: string; phrase: string; fromFixed: boolean }[] = [];
+  for (const s of sentences) {
+    const gs = grams(s.text);
+    const hit = [...gs].find((g) => fixed.has(g) || seen.has(g));
+    if (hit) out.push({ path: s.path, phrase: hit, fromFixed: fixed.has(hit) });
+    for (const g of gs) seen.add(g);
+  }
+  return out;
+}
+
+/** 리포트 전체에서 횟수를 묶는 말(D-052 3단계): "곁에서"는 3번까지 */
+export const CAPPED_WORDS: readonly { word: string; re: RegExp; cap: number }[] = [{ word: '곁에서', re: /곁에서/gu, cap: 3 }];
+
+/** 묶는 말이 fixedTexts까지 합쳐 cap번을 넘으면, 넘친 만큼 sentences 쪽 뒤 문장을 다시 쓰게 한다(soft, 첫 시도에서만) */
+export function validateWordCap(sentences: readonly { path: string; text: string }[], fixedTexts: readonly string[] = []): Violation[] {
+  return wordCapOverflow(sentences, fixedTexts).map(({ word, cap, used, paths }) => ({
+    code: 'repeatedWord' as const,
+    path: paths[0]!,
+    detail: `"${word}"는 리포트 전체에서 ${cap}번까지만 씁니다(지금 ${used}번). 다른 말로 바꿉니다: ${paths.join(', ')}`,
+  }));
+}
+
+/** 묶는 말마다 cap을 넘게 만든 sentences 쪽 문장 위치(넘친 말만) */
+export function wordCapOverflow(
+  sentences: readonly { path: string; text: string }[],
+  fixedTexts: readonly string[] = [],
+): { word: string; cap: number; used: number; paths: string[] }[] {
+  return CAPPED_WORDS.flatMap(({ word, re, cap }) => {
+    const count = (t: string) => t.match(re)?.length ?? 0;
+    let used = fixedTexts.reduce((n, t) => n + count(t), 0);
+    const paths: string[] = [];
+    for (const s of sentences) {
+      const c = count(s.text);
+      if (c && used + c > cap) paths.push(s.path);
+      used += c;
+    }
+    return paths.length ? [{ word, cap, used, paths }] : [];
+  });
+}
+
+/**
+ * 월·연 칸의 합·충 각도 옮겨 쓰기(soft, 첫 시도에서만, D-052 3단계, 사업자 결정: 합·충 각도에만).
+ * 각도 이름의 활용 꼴("부딪치며 바뀌듯", "흔들려 깨어나는", "합쳐 새 힘을 내듯", "자리…바꿔")과, 2차 실측에서 옮겨 쓴 뜻 설명 문구
+ * ("가만있던 것이 움직이는 쪽", "흩어진 것이 모이는 쪽")를 잡는다. 묶음·오행 각도 이름은 다시 쓰게 하지 않고 기록만 한다(D-051, observe).
+ * 근거의 관계 이름(끌어당김)은 사실이라 넣지 않는다
+ */
+export const PERIOD_ANGLE_COPY_RE = new RegExp(
+  [
+    // 관계 표 각도 이름과 활용 꼴
+    '어울려 하나', '새 힘(?:을)? ?내', '합쳐 새', '누그러져', '한데 모여', '부딪치며 바뀌', '흔들(?:어|려) 깨', '엇갈리며', '팽팽한 긴장', '맞물려 이어',
+    '자리[^.]{0,8}?(?:바꾸|바꿔|바꿈|옮기|옮겨)',
+    // 관계 표 뜻 설명 문구(RELATION_ANGLE_MEANINGS)
+    '잘 섞이', '거리가 가까워지', '다른 힘이 생기', '끊기지 않', '날 ?선 [가-힣]+ 무뎌', '흩어진 [가-힣]+ (?:한곳으로 )?모이', '변화가 생기',
+    '새로 보이', '다른 길이 보이', '맞서 힘이 실리', '가만있던 [가-힣]+ 움직이', '달리해 보', '달리 보게',
+  ].join('|'),
+  'u',
+);
+
+export function validatePeriodAngleCopy(sentences: readonly { path: string; text: string }[]): Violation[] {
+  return sentences.flatMap((s) => {
+    const m = PERIOD_ANGLE_COPY_RE.exec(s.text);
+    return m
+      ? [{ code: 'angleCopy' as const, path: s.path, detail: `풀이 각도 이름("${m[0]}")을 문장에 옮기지 않습니다. 그 관계가 이 사람에게 어떤 모습으로 나타나는지 다른 말로 씁니다` }]
+      : [];
+  });
+}
+
+/** 달·해 이름으로 시작하는 문장(D-052 3단계 C안): 사실 줄이 이미 달·해 이름과 간지를 보여 준다 */
+const PERIOD_NAME_START_RE = /^\s*(?:\d{4}\s?년|\d{1,2}\s?월|(?:이|이번|그)\s?(?:달|해)(?:은|는|에는|에|엔)|올해|내년)/u;
+
+/**
+ * 어른 월별·10년 AI 1문장은 달·해 이름(2026년 11월은, 2028년은, 이달은, 그 칸 자기 간지 기해(己亥)의)으로 시작하지 않는다(soft, 첫 시도에서만).
+ * ownPillars: 문장 위치 → 그 칸 자기 간지 표기. 대운·큰 흐름 이름("경오(庚午)의 큰 흐름")으로 시작하는 문장은 걸지 않는다(D-052 3단계 마감, 오탐)
+ */
+export function validatePeriodNameStart(sentences: readonly { path: string; text: string }[], ownPillars: ReadonlyMap<string, string> = new Map()): Violation[] {
+  return sentences.flatMap((s) => {
+    const own = ownPillars.get(s.path);
+    const m = PERIOD_NAME_START_RE.exec(s.text) ?? (own && s.text.trimStart().startsWith(own) ? ([own] as unknown as RegExpExecArray) : null);
+    return m
+      ? [{ code: 'openerFrame' as const, path: s.path, detail: `달·해 이름("${m[0].trim()}")으로 시작하지 않습니다. 화면에 달·해 이름과 사실 줄이 먼저 나옵니다. 그 뜻이 이 사람에게 뜻하는 바로 바로 시작합니다` }]
+      : [];
+  });
+}
+
+/**
+ * 월·연 AI 문장(D-052 3단계 마감, A): 원국과의 관계(같은 글자·묶이는·부딪치는 관계)를 말한 문장은 행동 제안으로 끝내지 않는다.
+ * 올해·내년 칸과 기존 칸의 규칙(relationAsAdvice)과 같다. soft(마지막 시도에서는 봐준다)
+ */
+export function validatePeriodRelationAdvice(sentences: readonly { path: string; text: string }[]): Violation[] {
+  return sentences.flatMap((s) =>
+    LUCK_RELATION_WORD_RE.test(s.text) && ADVICE_ENDING_RE.test(s.text)
+      ? [{ code: 'relationAsAdvice' as const, path: s.path, detail: '원국 글자와의 관계(같은 글자·묶이는·부딪치는 관계)를 말한 문장은 모습·경향으로만 쓰고 행동 제안으로 끝내지 않습니다. 제안은 그 칸 글자의 뜻으로 씁니다' }]
+      : [],
+  );
 }
 
 /** 풀이 말별로 그 말이 들어간 문장 수 */
@@ -568,4 +745,18 @@ export function validateSection(
       ? []
       : [{ code: 'sentenceCount', path, detail: `${sentences.length}문장 (필요 ${expectedCount}문장)` }];
   return [...countViolation, ...sentences.flatMap((s, i) => validateSentence(s, `${path}[${i}]`, rules))];
+}
+
+/**
+ * 문장이 말한 관계(같은 글자·묶임·부딪침)가 그 근거의 관계 목록에 있는지(D-052 3단계 버그 수정의 일관성 검사).
+ * 목록에 없는 관계를 말했으면 그 종류를 돌려준다. rels: rankRelations(luckRelations(...)) 결과(칩과 같은 데이터)
+ */
+export function relationWordsMismatch(text: string, rels: readonly { kind: string }[]): ('same' | 'combine' | 'clash')[] {
+  const has = {
+    same: rels.some((r) => r.kind === 'same'),
+    combine: rels.some((r) => r.kind === 'stemCombine' || r.kind === 'branchSixCombine'),
+    clash: rels.some((r) => r.kind === 'stemClash' || r.kind === 'branchClash'),
+  };
+  const said = { same: /같은 글자/u.test(text), combine: /묶이|묶여|끌어당/u.test(text), clash: /부딪/u.test(text) };
+  return (['same', 'combine', 'clash'] as const).filter((k) => said[k] && !has[k]);
 }

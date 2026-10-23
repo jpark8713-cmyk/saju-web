@@ -281,7 +281,7 @@ export function yearEvidence(chart: SajuChart, years: readonly YearPeriod[]): Ev
     const main = y.relations[0];
     const flow = y.daewoon ? `${pillarLabel(y.daewoon.pillar)} 대운(${daewoonStartLabel(y.daewoon)}부터)` : '첫 대운 전';
     const turn = y.nextDaewoon
-      ? `, ${y.nextDaewoon.startYear}년 ${y.nextDaewoon.startMonth}월에 ${pillarLabel(y.nextDaewoon.pillar)} 대운으로 바뀜(${yearDaewoonLabel(y)})`
+      ? `, ${y.nextDaewoon.startYear}년 ${y.nextDaewoon.startMonth}월에 ${pillarLabel(y.nextDaewoon.pillar)} 대운(${daewoonStartLabel(y.nextDaewoon)}부터)으로 바뀜(${yearDaewoonLabel(y)})`
       : '';
     const dws = [y.daewoon, y.nextDaewoon].filter((d): d is DaewoonEntry => !!d);
     return {

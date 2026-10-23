@@ -124,6 +124,25 @@ export const RELATION_ANGLES: Readonly<Record<'combine' | 'clash', readonly Angl
   ],
 });
 
+/**
+ * 월·연 칸 프롬프트에 넣는 합·충 각도의 뜻 설명(D-052 3단계). 각도 이름 대신 넣는다:
+ * 실측에서 이름을 문장에 그대로 옮겼다("부딪치며 바뀌듯", "합쳐 새 힘을 내듯"). 이름의 낱말을 쓰지 않고 가리키는 쪽만 적었다
+ */
+export const RELATION_ANGLE_MEANINGS: Readonly<Record<string, string>> = Object.freeze({
+  '어울려 하나 되기': '주변과 잘 섞이는 쪽',
+  '서로 끌어당김': '거리가 가까워지는 쪽',
+  '합쳐 새 힘 내기': '둘이 더해져 다른 힘이 생기는 쪽',
+  '맞물려 이어짐': '앞뒤가 끊기지 않는 쪽',
+  '누그러져 부드러워짐': '날 선 것이 무뎌지는 쪽',
+  '한데 모여 커짐': '흩어진 것이 모이는 쪽',
+  '부딪치며 바뀜': '변화가 생기는 쪽',
+  '흔들어 깨움': '익숙한 것이 새로 보이는 쪽',
+  '엇갈리며 새 길': '다른 길이 보이는 쪽',
+  '팽팽한 긴장': '양쪽이 맞서 힘이 실리는 쪽',
+  '자극·움직임': '가만있던 것이 움직이는 쪽',
+  '자리 바꿈': '하던 방식을 달리해 보는 쪽',
+});
+
 /** 12세 이하 묶음 각도 부분집합. 없는 묶음은 표 전체를 그대로 쓴다 */
 export function childGroupAngles(group: TenGodGroupId, toddler: boolean): readonly Angle[] {
   const all = GROUP_ANGLES[group];

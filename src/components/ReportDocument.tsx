@@ -310,6 +310,18 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
                     ))}
                   </div>
                 )}
+                {/* 코드 사실 줄(D-052 3단계): 어른 월별·10년은 AI 문장 앞에, 10년 흐름의 올해·내년은 AI 문장 대신. PDF에는 링크 대신 문구만 */}
+                {g.fact && (
+                  <p className="period-fact" data-testid="period-fact">
+                    {g.fact.text}
+                    {g.fact.link && ' '}
+                    {g.fact.link && (mode === 'screen' ? (
+                      <a href={g.fact.link.href} className="period-link">{g.fact.link.label} →</a>
+                    ) : (
+                      <span>({g.fact.link.label})</span>
+                    ))}
+                  </p>
+                )}
                 <Sentences list={g.sentences} ctx={ctx} />
               </div>
             ))}

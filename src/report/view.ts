@@ -1,12 +1,15 @@
 // 화면 리포트와 PDF가 함께 쓰는 리포트 데이터(같은 템플릿, 같은 섹션 순서, 같은 근거 번호).
 // 섹션 순서(SPEC Phase 3, 고정): 표지 → 사주 차트 → 오행 분포 → 총평 → 타고난 성향 → 주제별 풀이 → 대운 흐름 → 올해·내년 흐름
 //   → 월별 흐름(아이는 계절별 흐름) → 10년 흐름(D-052) → 풀이 근거 목록 → 면책·계산 기준·사업자 정보
+import { REPORT_LAYOUT } from '../config/report';
 import { TOPICS } from '../config/topics';
-import { BRANCHES_HANJA, BRANCHES_KO, PART_PLAIN, POSITION_PLAIN, STEMS_HANJA, STEMS_KO, pillarLabel } from '../engine/constants';
+import { BRANCHES_HANJA, BRANCHES_KO, PART_PLAIN, POSITION_PLAIN, STEMS_HANJA, STEMS_KO, TEN_GOD_GROUPS, branchLabel, pillarLabel, stemLabel } from '../engine/constants';
+import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
+import { josa } from './evidenceTerms';
 import { daewoonStartLabel } from '../engine/daewoon';
 import { buildPeriodEvidence, yearDaewoonLabel } from '../engine/evidence';
-import type { MonthPeriod, SeasonPeriod, YearPeriod } from '../engine/periods';
-import type { LuckRelation } from '../engine/relations';
+import { rankRelations, type MonthPeriod, type SeasonPeriod, type YearPeriod } from '../engine/periods';
+import { luckRelations, type LuckRelation } from '../engine/relations';
 import type { PillarPosition } from '../engine/types';
 import type { Evidence, SajuChart } from '../engine/types';
 import type { ReportBody, ReportSentence } from '../llm/types';
@@ -41,6 +44,11 @@ export interface SectionGroup {
   chips?: RelationChip[];
   /** 10년 흐름의 큰 흐름 표시와 전환 해 여부(D-052) */
   flow?: { label: string; turning: boolean };
+  /**
+   * 코드 사실 줄(D-052 3단계): 어른 월별·10년은 AI 문장 앞에, 10년 흐름의 올해·내년은 AI 문장 대신(링크: 올해·내년 칸).
+   * PDF에는 링크 대신 문구만
+   */
+  fact?: { text: string; link?: { href: string; label: string } };
 }
 
 export interface TextSection {
@@ -137,8 +145,43 @@ function relationChips(p: { stem: number; branch: number }, rels: readonly LuckR
 
 const md = (d: { month: number; day: number }) => `${d.month}/${d.day}`;
 const monthTitle = (m: MonthPeriod) => `${m.from.year}년 ${m.from.month}월 · ${m.term} ${md(m.from)}~${md(m.to)} · ${pillarLabel(m.pillar)}`;
-const seasonTitle = (g: SeasonPeriod) => `${g.name} · ${g.from.year}년 ${md(g.from)} ~ ${g.to.year}년 ${md(g.to)}`;
+/** 묶음 이름(D-052 3단계): 계절 이름 대신 날짜 범위와 절기. "2026년 10/8 ~ 2027년 1/4 (한로·입동·대설)" */
+const seasonTitle = (g: SeasonPeriod, months: readonly MonthPeriod[]) =>
+  `${g.from.year}년 ${md(g.from)} ~ ${g.to.year}년 ${md(g.to)} (${g.monthIndices.map((i) => months[i]!.term).join('·')})`;
 const yearTitle = (y: YearPeriod) => `${y.year}년 · ${pillarLabel(y.pillar)} · 만 ${y.ageAfterBirthday}세(생일 뒤)`;
+
+/** 올해(0)·내년(1) 글자와 원국 글자의 관계 칩: 월·10년 칸과 같은 계산(D-052 3단계) */
+export function seunRelations(chart: SajuChart, i: number): LuckRelation[] {
+  const y = chart.seun[i];
+  return y ? rankRelations(luckRelations(chart.pillars, y.pillar)) : [];
+}
+
+function seunChips(chart: SajuChart, i: number): RelationChip[] {
+  const y = chart.seun[i];
+  return y ? relationChips(y.pillar, seunRelations(chart, i)) : [];
+}
+
+const REL_SENTENCE: Record<LuckRelation['kind'], string> = {
+  same: '같은 글자예요', stemCombine: '서로 묶이는 관계예요', branchSixCombine: '서로 묶이는 관계예요', stemClash: '서로 부딪치는 관계예요', branchClash: '서로 부딪치는 관계예요',
+};
+
+/**
+ * 달·해 사실 줄(D-052 3단계, 코드 문구): 윗글자·아랫글자의 뜻 묶음과 주된 관계 하나.
+ * 어른 월별·10년은 칸마다 이 줄 + AI 1문장, 10년 흐름의 올해·내년은 이 줄만(올해·내년 칸 링크)
+ */
+function periodFactLine(chart: SajuChart, p: { stem: number; branch: number }, rels: readonly LuckRelation[]): string {
+  const day = chart.pillars.day.stem;
+  const plain = (tg: string) => TEN_GOD_GROUPS.find((g) => (g.members as readonly string[]).includes(tg))!.plain;
+  const meaning = `윗글자 ${josa(stemLabel(p.stem), '은/는')} ${josa(plain(tenGodOfStem(day, p.stem)), '을/를')}, 아랫글자 ${josa(branchLabel(p.branch), '은/는')} ${josa(plain(tenGodOfBranch(day, p.branch)), '을/를')} 뜻하는 글자예요.`;
+  const r = rels[0];
+  if (!r) return meaning;
+  const [pos, part] = r.ref.split('.') as [PillarPosition, 'stem' | 'branch'];
+  const target = chart.pillars[pos];
+  if (!target) return meaning;
+  const own = r.luckPart === 'stem' ? `윗글자 ${stemLabel(p.stem)}` : `아랫글자 ${branchLabel(p.branch)}`;
+  const theirs = `${POSITION_PLAIN[pos]} ${PART_PLAIN[part]} ${part === 'stem' ? stemLabel(target.stem) : branchLabel(target.branch)}`;
+  return `${meaning} ${josa(own, '은/는')} ${josa(theirs, '와/과')} ${REL_SENTENCE[r.kind]}.`;
+}
 
 /** 칸 이름이 붙은 문장 묶음 (근거 목록의 ↳ 줄에 칸 이름을 보여 준다) */
 interface LabeledSentences {
@@ -217,8 +260,9 @@ export function buildReportView(args: {
   const periodBlocks: LabeledSentences[] = bp && facts
     ? [
         ...(bp.months ?? []).map((n, i) => ({ where: `${facts.months[i]!.from.year}년 ${facts.months[i]!.from.month}월`, sentences: n.sentences, section: `month:${i}` })),
-        ...(bp.seasons ?? []).map((n, i) => ({ where: facts.seasons[i]!.name, sentences: n.sentences, section: `season:${i}` })),
-        ...bp.years.map((n, i) => ({ where: `${facts.years[i]!.year}년`, sentences: n.sentences, section: `year:${i}` })),
+        ...(bp.seasons ?? []).map((n, i) => ({ where: seasonTitle(facts.seasons[i]!, facts.months), sentences: n.sentences, section: `season:${i}` })),
+        // 10년 흐름 문장의 index는 그해 순번이다(올해·내년을 뺀 새 리포트는 2부터, D-052 3단계)
+        ...bp.years.map((n) => ({ where: `${facts.years[n.index]!.year}년`, sentences: n.sentences, section: `year:${n.index}` })),
       ]
     : [];
   // 화면에 나오는 문장만 근거 번호를 매긴다(고르지 않은 주제의 근거는 목록에 없다). 순서는 화면 순서와 같다
@@ -251,9 +295,10 @@ export function buildReportView(args: {
     {
       id: 'yearly',
       title: SECTION_TITLES.yearly,
+      // D-052 3단계 버그 수정: 올해·내년 머리 칩도 월·10년 칸과 같은 관계 데이터(rankRelations(luckRelations))로 계산한다
       groups: [
-        { subtitle: thisYear, sentences: thisYearSentences! },
-        { subtitle: nextYear, sentences: nextYearSentences! },
+        { subtitle: thisYear, sentences: thisYearSentences!, chips: seunChips(args.chart, 0) },
+        { subtitle: nextYear, sentences: nextYearSentences!, chips: seunChips(args.chart, 1) },
       ],
       // D-052: 달·해 흐름은 아래 칸에서 자세히(코드가 붙이는 안내 줄이다. AI 문장이 아니다)
       ...(bp
@@ -268,7 +313,7 @@ export function buildReportView(args: {
           }
         : {}),
     },
-    ...(bp && facts ? periodSections(bp, facts, periodSentences) : []),
+    ...(bp && facts ? periodSections(args.chart, bp, facts, periodSentences) : []),
   ];
   return {
     kind: 'full',
@@ -282,6 +327,7 @@ export function buildReportView(args: {
 
 /** 월별(아이는 계절별)·10년 흐름 섹션(D-052). sentences: 번호를 매긴 문장 묶음(달·묶음 → 해 순서) */
 function periodSections(
+  chart: SajuChart,
   bp: NonNullable<ReportBody['periods']>,
   facts: ReturnType<typeof buildPeriodEvidence>,
   sentences: readonly SentenceView[][],
@@ -289,35 +335,44 @@ function periodSections(
   const first = bp.months ?? bp.seasons ?? [];
   const lead = sentences.slice(0, first.length);
   const yearList = sentences.slice(first.length);
-  const seasonOfMonth = new Map(facts.seasons.flatMap((g) => g.monthIndices.map((i) => [i, seasonTitle(g)] as const)));
+  const seasonOfMonth = new Map(facts.seasons.flatMap((g) => g.monthIndices.map((i) => [i, seasonTitle(g, facts.months)] as const)));
   const top: TextSection = bp.months
     ? {
         id: 'months',
         title: SECTION_TITLES.months,
         groups: bp.months.map((_, i) => {
           const m = facts.months[i]!;
-          return { subtitle: monthTitle(m), sentences: lead[i]!, cluster: seasonOfMonth.get(i), chips: relationChips(m.pillar, m.relations) };
+          // C안(D-052 3단계): 코드 사실 줄 + AI 1문장
+          return { subtitle: monthTitle(m), sentences: lead[i]!, cluster: seasonOfMonth.get(i), chips: relationChips(m.pillar, m.relations), fact: { text: periodFactLine(chart, m.pillar, m.relations) } };
         }),
       }
     : {
         id: 'seasons',
         title: SECTION_TITLES.seasons,
-        groups: (bp.seasons ?? []).map((_, i) => {
+        groups: (bp.seasons ?? []).map((n, i) => {
           const g = facts.seasons[i]!;
-          const ms = g.monthIndices.map((k) => facts.months[k]!);
+          // 칩은 문장이 실제로 다룬(인용한) 달만(D-052 3단계)
+          const cited = new Set(n.sentences.flatMap((s) => s.evidenceIds));
+          const ms = g.monthIndices.filter((k) => cited.has(`month[${k}]`)).map((k) => facts.months[k]!);
           return {
-            subtitle: seasonTitle(g),
+            subtitle: seasonTitle(g, facts.months),
             sentences: lead[i]!,
             chips: ms.flatMap((m) => relationChips(m.pillar, m.relations.slice(0, 1)).map((c) => ({ ...c, text: `${m.from.month}월 ${c.text}` }))),
           };
         }),
       };
+  // 10년 흐름: 해마다 한 줄. AI 문장이 없는 올해·내년은 코드 사실 줄 + 올해·내년 칸 링크(D-052 3단계). 예전 리포트는 10해 모두 문장이 있다
+  const noteAt = new Map(bp.years.map((n, k) => [n.index, k] as const));
   const years: TextSection = {
     id: 'years',
     title: SECTION_TITLES.years,
-    groups: bp.years.map((_, i) => {
-      const y = facts.years[i]!;
-      return { subtitle: yearTitle(y), sentences: yearList[i]!, chips: relationChips(y.pillar, y.relations), flow: { label: yearDaewoonLabel(y), turning: !!y.nextDaewoon } };
+    groups: facts.years.flatMap((y): SectionGroup[] => {
+      const k = noteAt.get(y.index);
+      const head = { subtitle: yearTitle(y), chips: relationChips(y.pillar, y.relations), flow: { label: yearDaewoonLabel(y), turning: !!y.nextDaewoon } };
+      // 어른은 AI 문장 앞에도 사실 줄(C안). 아이 요약은 문장만
+      if (k !== undefined) return [{ ...head, sentences: yearList[k]!, ...(bp.months ? { fact: { text: periodFactLine(chart, y.pillar, y.relations) } } : {}) }];
+      if (y.index >= REPORT_LAYOUT.yearAiFrom) return [];
+      return [{ ...head, sentences: [], fact: { text: periodFactLine(chart, y.pillar, y.relations), link: { href: '#section-yearly', label: `위 ${SECTION_TITLES.yearly} 칸 참고` } } }];
     }),
   };
   return [top, years];

@@ -58,6 +58,8 @@ interface CallTiming {
 class BudgetedTransport implements LlmTransport {
   static spent = 0;
   static timings: CallTiming[] = [];
+  /** 받은 응답 원문(D-052 3단계): 예산에 닿아 리포트가 끝나지 않아도 이미 나온 문장을 파일로 남긴다 */
+  static responses: { label: string; text: string | null }[] = [];
   constructor(private readonly inner: LlmTransport, private readonly budgetUsd: number) {}
   get model(): string {
     return this.inner.model;
@@ -68,6 +70,7 @@ class BudgetedTransport implements LlmTransport {
     try {
       const res = await this.inner.complete(req, signal);
       BudgetedTransport.timings.push({ label: req.label, ms: Math.round(performance.now() - started), ok: true });
+      BudgetedTransport.responses.push({ label: req.label, text: res.text ?? null });
       BudgetedTransport.spent += res.usage.reduce((a, u) => a + safeCost(u), 0);
       return res;
     } catch (e) {
@@ -107,6 +110,8 @@ interface SampleResult {
   reportMs?: number;
   /** 이 샘플의 호출별 소요 시간 */
   timings?: CallTiming[];
+  /** 이 샘플에서 받은 응답 원문(생성 호출과 AI 검수 호출) */
+  responses?: { label: string; text: string | null }[];
 }
 
 async function runModel(
@@ -128,6 +133,7 @@ async function runModel(
     const chart = buildChart(SAMPLE_INPUTS[i]!, { referenceYear: SAMPLE_REFERENCE_YEAR });
     const evidence = buildEvidence(chart, { child: isChildChart(chart, SAMPLE_AS_OF) });
     const timingStart = BudgetedTransport.timings.length;
+    const responseStart = BudgetedTransport.responses.length;
     const started = performance.now();
     try {
       const r = await generateReport({ chart, evidence, topicIds, referenceYear: SAMPLE_REFERENCE_YEAR, transport, moderator, asOf: SAMPLE_AS_OF });
@@ -139,6 +145,7 @@ async function runModel(
         body: r.body,
         reportMs: Math.round(performance.now() - started),
         timings: BudgetedTransport.timings.slice(timingStart),
+        responses: BudgetedTransport.responses.slice(responseStart),
       };
       results.push(result);
       try {
@@ -172,6 +179,8 @@ async function runModel(
         ok: false,
         error: budgetHit ? `${message} (예산 ${budget} USD 도달로 중단)` : message,
         attempts: attempts.map((a) => ({ ...a, costUsd: attemptCost(a) })),
+        timings: BudgetedTransport.timings.slice(timingStart),
+        responses: BudgetedTransport.responses.slice(responseStart),
       });
       if (budgetHit) {
         process.stdout.write(`예산 ${budget} USD 도달: 여기까지의 결과를 저장하고 멈춥니다\n`);

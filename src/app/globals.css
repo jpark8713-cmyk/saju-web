@@ -570,6 +570,7 @@ a:hover {
 .period-turn{margin-left:8px;font-size:.92em;border-radius:999px;padding:1px 8px;background:#fbefd9;color:#9a5b00}
 .period-note{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:4px 0 0}
 .period-link{font-weight:600}
+.period-fact{margin:0;line-height:1.7}
 /* PDF: 월별 흐름은 2쪽(6개월씩), 10년 흐름은 1쪽 (D-052, 사업자 결정) */
 @media print{
   [data-mode="pdf"] [data-section="months"],[data-mode="pdf"] [data-section="seasons"],[data-mode="pdf"] [data-section="years"]{break-before:page}

@@ -11,12 +11,15 @@ export const REPORT_LAYOUT = Object.freeze({
   daewoonNoteSentences: 3,
   /** 올해·내년 흐름 (D-052: 첫 문장 그해 뜻·관계 + 마지막 행동 제안. 달·해 흐름은 아래 월별·10년 칸에) */
   yearlySentences: 2,
-  /** 월별 흐름(어른): 절기 달 12개, 달마다 2문장 (D-052) */
+  /** 월별 흐름(어른): 절기 달 12개, 달마다 코드 사실 줄 + AI 1문장 (D-052 3단계 C안) */
   monthCount: 12,
-  monthSentences: 2,
-  /** 10년 흐름: 해 10개, 어른은 해마다 2문장, 아이는 1문장 (D-052) */
+  monthSentences: 1,
+  /** 10년 흐름: 해 10개, 어른·아이 모두 해마다 AI 1문장 (D-052) */
   yearCount: 10,
-  yearSentences: 2,
+  /** 10년 흐름의 앞 두 해(올해·내년)는 AI 문장 없이 코드 사실 줄 + 올해·내년 칸 링크로 보여 준다(D-052 3단계 정정) */
+  yearAiFrom: 2,
+  /** D-052 3단계 C안: 어른 월별·10년은 칸마다 코드 사실 줄 + AI 1문장 */
+  yearSentences: 1,
   childYearSentences: 1,
   /** 아이 리포트의 부모 관점 요약: 절기 달 3개씩 4묶음, 묶음마다 2문장 (D-052) */
   seasonCount: 4,

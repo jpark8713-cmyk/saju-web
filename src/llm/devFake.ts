@@ -44,29 +44,37 @@ function baseDraft(user: string) {
 }
 
 /** 월별·10년·아이 요약(D-052): 칸마다 그 칸 근거를 인용하고 첫 문장에 그 칸 윗글자의 뜻 묶음을 쓴다 */
-function periodNotes(user: string, idOf: (i: number) => string, count: number, per: number, prefix: string) {
+// D-052 3단계: 문장을 짧게(같은 글귀 5어절·첫머리 틀 검사에 걸리지 않게), 칸 이름과 번호를 첫 어절에 붙인다
+function periodNotes(user: string, idOf: (i: number) => string, indices: readonly number[], per: number, prefix: string) {
   const start = user.indexOf('[');
   const end = user.indexOf('\n\n## 작성할 칸');
   const rows = start < 0 || end < 0 ? [] : (JSON.parse(user.slice(start, end)) as { id: string; content: string }[]);
-  return Array.from({ length: count }, (_, i) => {
+  return indices.map((i) => {
     const ko = /\((비겁|식상|재성|관성|인성)\)/u.exec(rows.find((e) => e.id === idOf(i))?.content ?? '')?.[1] ?? '비겁';
     return {
       index: i,
       sentences: Array.from({ length: per }, (_, j) => ({
-        text: j === 0 ? `${prefix} ${i + 1}번째 칸은 ${GROUP_PLAIN[ko]}의 뜻이 보이는 때예요(개발용 가짜 문장).` : `${prefix} ${i + 1}번째 칸 풀이 문장이에요(개발용 가짜 문장).`,
+        text: j === 0 ? `${prefix}${i + 1}번째 칸은 ${GROUP_PLAIN[ko]}의 뜻이에요(개발용가짜문장).` : `${prefix}${i + 1}번째 칸 풀이예요(개발용가짜문장).`,
         evidenceIds: [idOf(i)],
       })),
     };
   });
 }
 
+const range = (from: number, to: number) => Array.from({ length: to - from }, (_, k) => from + k);
+/** 10년 흐름에서 쓸 해(프롬프트의 "index 2, 3, … 차례로") */
+function yearIndicesIn(user: string, key: 'periods' | 'years'): number[] {
+  const m = new RegExp(`${key}: index ([\\d, ]+) 차례로`, 'u').exec(user);
+  return m ? m[1]!.split(',').map((x) => Number(x.trim())) : range(REPORT_LAYOUT.yearAiFrom, REPORT_LAYOUT.yearCount);
+}
+
 function periodDraft(user: string, label: string) {
   const L = REPORT_LAYOUT;
-  if (label === 'monthly') return { periods: periodNotes(user, (i) => `month[${i}]`, L.monthCount, L.monthSentences, '월별') };
-  if (label === 'decade') return { periods: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.yearSentences, '10년') };
+  if (label === 'monthly') return { periods: periodNotes(user, (i) => `month[${i}]`, range(0, L.monthCount), L.monthSentences, '월별') };
+  if (label === 'decade') return { periods: periodNotes(user, (i) => `year[${i}]`, yearIndicesIn(user, 'periods'), L.yearSentences, '10년') };
   return {
-    seasons: periodNotes(user, (i) => `month[${i * 3}]`, L.seasonCount, L.seasonSentences, '계절'),
-    years: periodNotes(user, (i) => `year[${i}]`, L.yearCount, L.childYearSentences, '10년'),
+    seasons: periodNotes(user, (i) => `month[${i * 3}]`, range(0, L.seasonCount), L.seasonSentences, '계절'),
+    years: periodNotes(user, (i) => `year[${i}]`, yearIndicesIn(user, 'years'), L.childYearSentences, '10년'),
   };
 }
 

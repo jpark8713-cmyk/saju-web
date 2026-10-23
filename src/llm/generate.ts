@@ -9,7 +9,7 @@ import { audienceOf } from '../report/audience';
 import { summaryTemplate } from '../report/summaryTemplate';
 import { targetDaewoonIndices, topicEvidence } from './evidenceSelect';
 import {
-  CHILD_FORBIDDEN, CHILD_VOICE_FORBIDDEN, COMMON_FORBIDDEN, GROWN_NOTE_FORBIDDEN, PERIOD_SCENE_FORBIDDEN, TODDLER_FORBIDDEN, TODDLER_MONEY_FORBIDDEN,
+  CHILD_FORBIDDEN, CHILD_VOICE_FORBIDDEN, COMMON_FORBIDDEN, GROWN_NOTE_FORBIDDEN, PERIOD_SCENE_FORBIDDEN, PERIOD_TIME_FORBIDDEN, TODDLER_FORBIDDEN, TODDLER_MONEY_FORBIDDEN,
 } from './forbidden';
 import { CATEGORY_KO, ModerationUnavailable, type ModerationCallRecord, type ModerationFlag, type Moderator } from './moderation';
 import { SYSTEM_PROMPT, baseUserMessage, childPeriodUserMessage, decadeUserMessage, monthlyUserMessage, topicUserMessage } from './prompt';
@@ -24,12 +24,13 @@ import {
   prepareRules, repeatedWordCounts, validateAngleCopy, validateAngleMix, validateConcreteCase, validateInventedCount, validateRepeatedStem,
   validateDoubleBase, validateOpenerRepeat, validatePeriodLead, validatePeriodNotes, validateRepetition, validateSection, validateStandalone, validateVacuous,
   validateYearly, type PeriodFacts, type PreparedRules, type YearFacts,
+  repeatedPhrases, validateOpenerFrame, validatePeriodNameStart, validatePeriodRelationAdvice, validatePeriodAngleCopy, validatePhraseRepeat, validateWordCap, wordCapOverflow,
 } from './validate';
 import {
   fallbackBase, fallbackChildPeriods, fallbackMonths, fallbackTopic, fallbackYears, patchBase, patchChildPeriods, patchPeriods, patchTopic,
 } from './fallbackText';
 import { angleLines, assignAngles, sectionKeys } from './angles';
-import { TEN_GOD_GROUPS } from '../engine/constants';
+import { TEN_GOD_GROUPS, pillarLabel } from '../engine/constants';
 import { buildPeriodEvidence, childVoiceEvidence } from '../engine/evidence';
 import { luckRelations } from '../engine/relations';
 import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
@@ -610,8 +611,9 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
     ...reportEvidence.filter((e) => e.kind === 'dayMaster' || e.kind === 'tenGodGroup' || e.kind === 'elementBalance'),
     ...period.evidence,
   ];
+  // D-052 3단계 C안: 근거에 없는 시간 서술(처음 들어오는·비로소·새로 들어오는 등)도 하드로 막는다(앞뒤 달 사실을 모르고 써서 틀렸다)
   const periodRuleOf = (forbidden: readonly ForbiddenRule[]) =>
-    prepareRules({ evidence: periodEvidence, forbidden: [...forbidden, PERIOD_SCENE_FORBIDDEN], maxChars: L.maxSentenceChars });
+    prepareRules({ evidence: periodEvidence, forbidden: [...forbidden, PERIOD_SCENE_FORBIDDEN, PERIOD_TIME_FORBIDDEN], maxChars: L.maxSentenceChars });
   const periodRules = periodRuleOf(careForbidden);
   const grownPeriodRules = child ? periodRuleOf([...COMMON_FORBIDDEN, ...CHILD_VOICE_FORBIDDEN, ...GROWN_NOTE_FORBIDDEN]) : periodRules;
   // AI가 칸을 더 돌려주면(범위 밖 i) 그 칸의 사실은 비어 있다. 칸 수 위반은 validatePeriodNotes가 따로 남긴다
@@ -634,54 +636,80 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
       hasRelation: ms.some((m) => m.relations.length > 0),
     };
   };
+  // 칸 안 반복(D-052 3단계, 첫 시도에서만): 같은 글귀·"곁에서" 횟수·합·충 각도 이름(뜻 설명 포함) 옮겨 쓰기
   const periodSoft = (ss: { path: string; text: string }[], attempt: number) => [
     ...validateRepetition(ss),
     ...validateStandalone(ss),
-    ...firstOnly(attempt, validateDoubleBase(ss)),
+    ...firstOnly(attempt, [...validateDoubleBase(ss), ...validatePhraseRepeat(ss), ...validateWordCap(ss), ...validatePeriodAngleCopy(ss)]),
     ...validateRepeatedStem(ss),
     ...validateInventedCount(ss),
   ];
-  const periodAngles = (keys: readonly string[], names: readonly string[]) => angleLines(angles, keys.map((key, i) => ({ key, name: names[i]! })));
+  // 월·연 칸에는 관계 표를 넣지 않는다(D-052 3단계 C안: 각도 이름도 뜻 설명도 문장에 그대로 옮겼다). 관계는 화면의 사실 줄·칩이 보여 준다
+  const periodAngles = (keys: readonly string[], names: readonly string[]) =>
+    angleLines(angles, keys.map((key, i) => ({ key, name: names[i]! })), { omitRelation: true });
+  // 10년 흐름의 올해·내년은 AI 문장 없이 코드 사실 줄(D-052 3단계). AI는 year[yearAiFrom]부터 쓴다
+  const aiYears = period.years.filter((y) => y.index >= L.yearAiFrom);
+  const aiYearIdx = aiYears.map((y) => y.index);
+  const skippedYearIds = new Set(period.years.filter((y) => y.index < L.yearAiFrom).map((y) => `year[${y.index}]`));
+  const monthEvidenceOnly = periodEvidence.filter((e) => e.kind !== 'year');
+  const yearEvidenceOnly = periodEvidence.filter((e) => e.kind !== 'month' && !skippedYearIds.has(e.id));
+  const childEvidence = periodEvidence.filter((e) => !skippedYearIds.has(e.id));
+  const monthIdx = period.months.map((m) => m.index);
+  const seasonIdx = period.seasons.map((g) => g.index);
+  const yearRulesOf = (i: number) => (period.years[i] && period.years[i]!.ageAfterBirthday >= 13 ? grownPeriodRules : periodRules);
+  // 어른 C안: 칸마다 AI 1문장. 사실(간지·뜻·주된 관계)은 화면의 코드 사실 줄이 맡으므로 첫 문장 뜻 검사는 없다.
+  // 대신 달·해 이름으로 시작하지 않기와 문장끼리 첫머리 틀 검사(첫 시도에서만)
+  // 관계를 말한 문장은 행동 제안으로 끝내지 않는다(soft, 기존 칸과 같은 규칙). 달·해 이름 시작은 그 칸 자기 간지만 본다
+  const ownPillarsOf = (prefix: string, notes: readonly PeriodNote[], pillarOf: (index: number) => Pillar | undefined) =>
+    new Map(notes.flatMap((n, k) => {
+      const p = pillarOf(n.index);
+      return p ? n.sentences.map((_, j) => [`${prefix}[${k}][${j}]`, pillarLabel(p)] as const) : [];
+    }));
+  const adultPeriodSoft = (ss: { path: string; text: string }[], attempt: number, own: ReadonlyMap<string, string>) => [
+    ...firstOnly(attempt, [...validatePeriodNameStart(ss, own), ...validateOpenerFrame(ss)]),
+    ...validatePeriodRelationAdvice(ss),
+    ...periodSoft(ss, attempt),
+  ];
+
   const periodJobs = child
     ? [orTemplate('periods:child', runJob<ChildPeriodDraft>(ctx, {
         label: 'periods:child',
         jsonSchema: CHILD_PERIOD_JSON_SCHEMA,
         buildUser: (violations) => childPeriodUserMessage({
-          evidence: periodEvidence, audience, seasons: period.seasons, years: period.years, violations,
-          angleBlock: periodAngles(periodKeys, [...period.seasons.map((g) => `seasons[${g.index}]`), ...period.years.map((y) => `years[${y.index}]`)]),
+          evidence: childEvidence, audience, seasons: period.seasons, years: aiYears, violations,
+          angleBlock: periodAngles(
+            [...period.seasons.map((g) => `season:${g.index}`), ...aiYears.map((y) => `year:${y.index}`)],
+            [...period.seasons.map((g) => `seasons[${g.index}]`), ...aiYears.map((y) => `years[${y.index}]`)],
+          ),
         }),
         parse: parseChildPeriodDraft,
         validate: (d) => [
-          ...validatePeriodNotes(d.seasons, 'seasons', { count: L.seasonCount, sentences: L.seasonSentences }, () => periodRules, seasonFacts),
-          ...validatePeriodNotes(d.years, 'years', { count: L.yearCount, sentences: L.childYearSentences }, (i) => (period.years[i] && period.years[i]!.ageAfterBirthday >= 13 ? grownPeriodRules : periodRules), yearFactsAt),
+          ...validatePeriodNotes(d.seasons, 'seasons', { indices: seasonIdx, sentences: L.seasonSentences }, () => periodRules, seasonFacts),
+          ...validatePeriodNotes(d.years, 'years', { indices: aiYearIdx, sentences: L.childYearSentences }, yearRulesOf, yearFactsAt),
         ],
         softValidate: (d, attempt) => [
-          ...validatePeriodLead(d.seasons, 'seasons', seasonFacts),
-          ...validatePeriodLead(d.years, 'years', yearFactsAt),
-          ...firstOnly(attempt, [...validateOpenerRepeat(d.seasons, 'seasons'), ...validateOpenerRepeat(d.years, 'years')]),
+          ...validatePeriodLead(d.seasons, 'seasons', seasonFacts, seasonIdx),
+          ...validatePeriodLead(d.years, 'years', yearFactsAt, aiYearIdx),
+          ...firstOnly(attempt, [...validateOpenerRepeat(d.seasons, 'seasons'), ...validateOpenerFrame(periodSentences('years', d.years))]),
           ...periodSoft(childPeriodSentences(d), attempt),
         ],
         sentences: childPeriodSentences,
         patch: (d, paths) => {
-          const tpl = fallbackChildPeriods(args.chart, period.months, period.seasons, period.years);
+          const tpl = fallbackChildPeriods(args.chart, period.months, period.seasons, aiYears);
           return d === null ? { value: tpl, replaced: draftSize(tpl) } : patchChildPeriods(d, tpl, paths);
         },
-      }), () => fallbackChildPeriods(args.chart, period.months, period.seasons, period.years)).then((r) => ({ kind: 'child' as const, ...r }))]
+      }), () => fallbackChildPeriods(args.chart, period.months, period.seasons, aiYears)).then((r) => ({ kind: 'child' as const, ...r }))]
     : [
         orTemplate('monthly', runJob<PeriodDraft>(ctx, {
           label: 'monthly',
           jsonSchema: PERIOD_JSON_SCHEMA,
           buildUser: (violations) => monthlyUserMessage({
-            evidence: periodEvidence, monthCount: L.monthCount, violations,
+            evidence: monthEvidenceOnly, monthCount: L.monthCount, violations,
             angleBlock: periodAngles(period.months.map((m) => `month:${m.index}`), period.months.map((m) => `periods[${m.index}]`)),
           }),
           parse: parsePeriodDraft,
-          validate: (d) => validatePeriodNotes(d.periods, 'months', { count: L.monthCount, sentences: L.monthSentences }, () => periodRules, monthFacts),
-          softValidate: (d, attempt) => [
-            ...validatePeriodLead(d.periods, 'months', monthFacts),
-            ...firstOnly(attempt, validateOpenerRepeat(d.periods, 'months')),
-            ...periodSoft(periodSentences('months', d.periods), attempt),
-          ],
+          validate: (d) => validatePeriodNotes(d.periods, 'months', { indices: monthIdx, sentences: L.monthSentences }, () => periodRules, monthFacts),
+          softValidate: (d, attempt) => adultPeriodSoft(periodSentences('months', d.periods), attempt, ownPillarsOf('months', d.periods, (i) => period.months[i]?.pillar)),
           sentences: (d) => periodSentences('months', d.periods),
           patch: (d, paths) => {
             const tpl = fallbackMonths(args.chart, period.months);
@@ -692,22 +720,18 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
           label: 'decade',
           jsonSchema: PERIOD_JSON_SCHEMA,
           buildUser: (violations) => decadeUserMessage({
-            evidence: periodEvidence, yearCount: L.yearCount, violations,
-            angleBlock: periodAngles(period.years.map((y) => `year:${y.index}`), period.years.map((y) => `periods[${y.index}]`)),
+            evidence: yearEvidenceOnly, indices: aiYearIdx, violations,
+            angleBlock: periodAngles(aiYears.map((y) => `year:${y.index}`), aiYears.map((y) => `periods[${y.index}]`)),
           }),
           parse: parsePeriodDraft,
-          validate: (d) => validatePeriodNotes(d.periods, 'years', { count: L.yearCount, sentences: L.yearSentences }, () => periodRules, yearFactsAt),
-          softValidate: (d, attempt) => [
-            ...validatePeriodLead(d.periods, 'years', yearFactsAt),
-            ...firstOnly(attempt, validateOpenerRepeat(d.periods, 'years')),
-            ...periodSoft(periodSentences('years', d.periods), attempt),
-          ],
+          validate: (d) => validatePeriodNotes(d.periods, 'years', { indices: aiYearIdx, sentences: L.yearSentences }, () => periodRules, yearFactsAt),
+          softValidate: (d, attempt) => adultPeriodSoft(periodSentences('years', d.periods), attempt, ownPillarsOf('years', d.periods, (i) => period.years[i]?.pillar)),
           sentences: (d) => periodSentences('years', d.periods),
           patch: (d, paths) => {
-            const tpl = fallbackYears(args.chart, period.years);
+            const tpl = fallbackYears(args.chart, aiYears);
             return d === null ? { value: tpl, replaced: draftSize(tpl) } : patchPeriods(d, tpl, paths, 'years');
           },
-        }), () => fallbackYears(args.chart, period.years)).then((r) => ({ kind: 'years' as const, ...r })),
+        }), () => fallbackYears(args.chart, aiYears)).then((r) => ({ kind: 'years' as const, ...r })),
       ];
 
   const settledPeriods = Promise.allSettled(periodJobs.map((p) => guard(p as Promise<unknown>)));
@@ -721,17 +745,10 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
   const periodValues = periodResults.map((r) => (r as PromiseFulfilledResult<PeriodResult>).value);
   const periodOf = (kind: 'months' | 'years') => (periodValues.find((p) => p.kind === kind)?.value as PeriodDraft | undefined)?.periods;
   const childPeriods = periodValues.find((p) => p.kind === 'child')?.value as ChildPeriodDraft | undefined;
-  const periods: ReportBody['periods'] = {
-    asOf: asOf.toISOString(),
-    referenceYear: args.referenceYear,
-    ...(child ? { seasons: childPeriods!.seasons } : { months: periodOf('months')! }),
-    years: child ? childPeriods!.years : periodOf('years')!,
-  };
-  const periodTexts = child ? childPeriodSentences(childPeriods!) : [...periodSentences('months', periods.months!), ...periodSentences('years', periods.years)];
-  // 운영자 알림 분모(D-052): AI에게 쓰라고 요청한 문장 수(대체 전)
+  // 운영자 알림 분모(D-052): AI에게 쓰라고 요청한 문장 수(대체 전). 10년 흐름은 올해·내년을 뺀 해만
   const requestedSentences =
     L.summaryAiSentences + L.traitsSentences + daewoonIndices.length * L.daewoonNoteSentences + 2 * L.yearlySentences + topics.length * L.topicSentences +
-    (child ? L.seasonCount * L.seasonSentences + L.yearCount * L.childYearSentences : L.monthCount * L.monthSentences + L.yearCount * L.yearSentences);
+    (child ? L.seasonCount * L.seasonSentences + aiYears.length * L.childYearSentences : L.monthCount * L.monthSentences + aiYears.length * L.yearSentences);
   const [base, ...firstTopics] = settled.map((r) => (r as PromiseFulfilledResult<unknown>).value) as [
     Awaited<typeof baseJob>,
     ...Awaited<(typeof topicJobs)[number]>[],
@@ -745,6 +762,13 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
         firstTopics.map((t) => t.value.sentences),
         (topic, avoid) => topicJob(topic, avoid).then((r) => r.value.sentences),
       );
+  const periods: ReportBody['periods'] = {
+    asOf: asOf.toISOString(),
+    referenceYear: args.referenceYear,
+    ...(child ? { seasons: childPeriods!.seasons } : { months: periodOf('months')! }),
+    years: child ? childPeriods!.years : periodOf('years')!,
+  };
+  const periodTexts = child ? childPeriodSentences(childPeriods!) : [...periodSentences('months', periods.months!), ...periodSentences('years', periods.years)];
   return {
     body: {
       summary: [...template, ...base.value.summary],
@@ -757,7 +781,10 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
       ...templatedOf(ctx.log),
       requestedSentences,
       periods,
-      observed: observe([...baseSentences(base.value), ...topics.flatMap((t, i) => sentencesOf(`topics.${t.id}`, topicSentences[i]!)), ...periodTexts]),
+      observed: observe(
+        [...baseSentences(base.value), ...topics.flatMap((t, i) => sentencesOf(`topics.${t.id}`, topicSentences[i]!)), ...periodTexts],
+        [...sentencesOf('yearly.thisYear', base.value.yearly.thisYear), ...sentencesOf('yearly.nextYear', base.value.yearly.nextYear), ...periodTexts],
+      ),
     },
     attempts: ctx.log,
     periodEvidence: period.evidence,
@@ -769,8 +796,17 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
  * 다시 쓰게 하지 않고 기록만 남기는 검사(D-051, 사업자 결정): 각도 이름 옮겨 쓰기, 합·충 문장의 얇은 끝맺음("~모습이 보여요").
  * 다시 쓰게 하자 어른 리포트 비용·시간이 두 배가 됐다($0.12→$0.27, 34초→61초). 출시 후 실제 주문 문장으로 반복도를 보고 다시 정한다
  */
-function observe(sentences: readonly { path: string; text: string }[]): NonNullable<ReportBody['observed']> {
-  return { angleCopy: validateAngleCopy(sentences).length, thinRelation: validateVacuous(sentences).length };
+function observe(
+  sentences: readonly { path: string; text: string }[],
+  /** 월·연·올해·내년 문장(D-052 3단계: 칸 사이 반복은 다시 쓰게 하지 않고 기록만, 사업자 결정) */
+  periodish: readonly { path: string; text: string }[],
+): NonNullable<ReportBody['observed']> {
+  return {
+    angleCopy: validateAngleCopy(sentences).length,
+    thinRelation: validateVacuous(sentences).length,
+    periodPhraseRepeat: repeatedPhrases(periodish).length,
+    besideOver: wordCapOverflow(sentences).reduce((n, c) => n + c.paths.length, 0),
+  };
 }
 
 type Draft = BaseDraft | TopicDraft | PeriodDraft | ChildPeriodDraft;

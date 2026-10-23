@@ -73,7 +73,14 @@ export interface ReportBody {
   /** 월별·10년 흐름(D-052). 없으면(이전 리포트) 보여 주지 않는다 */
   periods?: ReportPeriods;
   /** 다시 쓰게 하지 않고 기록만 남기는 검사에 걸린 최종 문장 수(D-051): 각도 이름 옮겨 쓰기, 합·충 얇은 끝맺음 */
-  observed?: { angleCopy: number; thinRelation: number };
+  observed?: {
+    angleCopy: number;
+    thinRelation: number;
+    /** D-052 3단계(기록만): 월·연·올해·내년 문장에서 같은 글귀(5어절)를 되풀이한 문장 수 */
+    periodPhraseRepeat?: number;
+    /** D-052 3단계(기록만): 리포트 전체 "곁에서"가 3번을 넘게 한 문장 수 */
+    besideOver?: number;
+  };
 }
 
 export type ViolationCode =
@@ -99,6 +106,10 @@ export type ViolationCode =
   | 'wrongYearWord'
   /** 한 리포트에서 같은 풀이 말을 3문장 이상에 씀 (D-045) */
   | 'repeatedWord'
+  /** 10년 흐름에서 같은 틀(연도·간지·나이를 가린 첫머리)로 시작하는 문장이 너무 많음 (D-052, 첫 시도에서만) */
+  | 'openerFrame'
+  /** 월·연·올해·내년 문장에서 같은 글귀(5어절)가 두 번 이상 (D-052, 첫 시도에서만) */
+  | 'repeatedPhrase'
   /** 관계(합·충) 근거를 특정한 사람과의 관계로 바꿈 (D-045) */
   | 'relationAsPerson'
   /** 합·충을 인용한 문장이 행동 제안으로 끝남 (D-046) */
