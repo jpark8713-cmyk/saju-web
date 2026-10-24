@@ -106,6 +106,18 @@ export class MemoryStore implements Store {
       .map((o) => structuredClone(o));
   }
 
+  async listOrdersWithUncertainPayment(): Promise<Order[]> {
+    return [...this.orders.values()]
+      .filter((o) => !!o.payment.uncertain?.paymentKeys.length || o.payment.lastError === 'PG_UNREACHABLE')
+      .map((o) => structuredClone(o));
+  }
+
+  async listUnfinishedOrdersWithBirth(before: Date): Promise<Order[]> {
+    return [...this.orders.values()]
+      .filter((o) => o.status !== 'done' && !!o.pendingBirth && Date.parse(o.paidAt || o.createdAt) <= before.getTime())
+      .map((o) => structuredClone(o));
+  }
+
   async appendDeliveryLog(log: DeliveryLog): Promise<void> {
     this.deliveryLogs.push(structuredClone(log));
   }

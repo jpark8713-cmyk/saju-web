@@ -42,8 +42,9 @@ export async function toPreview(page: Page, o: BirthOpts = {}): Promise<void> {
 /** 화면 4 → 5 */
 export async function toCheckout(page: Page, topics: string[] = ['wealth']): Promise<void> {
   for (const t of topics) await page.getByTestId(`topic-${t}`).check();
-  await page.getByTestId('preview-next').click();
-  await expect(page.getByTestId('screen-checkout')).toBeVisible();
+  // 개발 서버는 결제 화면을 처음 열 때 컴파일하느라 기본 대기(5초)를 넘길 때가 있었다(가끔 실패). 주소가 바뀌는 것과 화면이 뜨는 것을 넉넉히 기다린다
+  await Promise.all([page.waitForURL(/\/checkout(\?|$)/, { timeout: 60_000 }), page.getByTestId('preview-next').click()]);
+  await expect(page.getByTestId('screen-checkout')).toBeVisible({ timeout: 30_000 });
 }
 
 /** 화면 5에서 결제하기 → 목 결제창에서 인증(개발 서버의 목 결제 어댑터, D-028) */

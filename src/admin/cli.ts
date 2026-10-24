@@ -3,9 +3,12 @@
 //   refunds show <접수번호>
 //   refunds process <접수번호> --result refunded|rejected [--note "메모"] [--cancelled-externally]
 //   orders recover-stuck
+//   payments uncertain
+//   payments resolve <주문번호> --result not-approved|approved-cancelled|approved-kept [--key <결제 키>] [--note "메모"]
 import { recoverStuckOrders } from '../orders/generation';
 import type { PaymentProvider } from '../payments/types';
 import type { RefundStatus, Store } from '../store/types';
+import { listUncertainPayments, resolveUncertainPayment, UNCERTAIN_CHECKS, type UncertainCheck } from './payments';
 import { AdminError, listRefundRows, processRefund, showRefund } from './refunds';
 
 export interface AdminDeps {
@@ -21,6 +24,8 @@ export const USAGE = [
   '  npm run admin -- refunds show <접수번호>',
   '  npm run admin -- refunds process <접수번호> --result refunded|rejected [--note "메모"] [--cancelled-externally]',
   '  npm run admin -- orders recover-stuck',
+  '  npm run admin -- payments uncertain',
+  '  npm run admin -- payments resolve <주문번호> --result not-approved|approved-cancelled|approved-kept [--key <결제 키>] [--note "메모"]',
 ].join('\n');
 
 const STATUSES: readonly RefundStatus[] = ['received', 'approved', 'rejected', 'refunded'];
@@ -59,6 +64,18 @@ export async function runAdmin(argv: readonly string[], deps: AdminDeps): Promis
         deps.now,
       );
       json({ refundId: updated.id, status: updated.status, processedAt: updated.processedAt, result: updated.result });
+      return 0;
+    }
+    // 승인 여부를 모르는 결제(D-054): 목록과 PG 확인 결과 기록. 기록하면 경고 로그·출생 정보 보류가 끝난다
+    if (group === 'payments' && command === 'uncertain') {
+      json(await listUncertainPayments(deps.store));
+      return 0;
+    }
+    if (group === 'payments' && command === 'resolve' && rest[0]) {
+      const result = option(rest, '--result');
+      if (!UNCERTAIN_CHECKS.includes(result as UncertainCheck)) throw new AdminError(`--result는 ${UNCERTAIN_CHECKS.join('|')} 중 하나예요`);
+      const o = await resolveUncertainPayment(deps.store, rest[0], { result: result as UncertainCheck, paymentKey: option(rest, '--key'), note: option(rest, '--note') ?? null }, deps.now);
+      json({ orderId: o.id, status: o.status, remaining: o.payment.uncertain?.paymentKeys ?? [], checks: o.payment.uncertainChecks ?? [] });
       return 0;
     }
     if (group === 'orders' && command === 'recover-stuck') {

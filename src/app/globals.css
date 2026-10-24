@@ -571,10 +571,22 @@ a:hover {
 .period-note{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:4px 0 0}
 .period-link{font-weight:600}
 .period-fact{margin:0;line-height:1.7}
-/* PDF: 월별 흐름은 2쪽(6개월씩), 10년 흐름은 1쪽 (D-052, 사업자 결정) */
+/* PDF: 월별 흐름은 2쪽, 10년 흐름은 1쪽 (D-052, 사업자 결정).
+   C안(사실 줄 + AI 1문장)으로 칸이 길어져 화면과 같은 크기로는 월별 3쪽 넘게·10년 2쪽이 됐다. PDF에서만 글자와 간격을 줄인다.
+   7번째 달에서 억지로 쪽을 넘기던 규칙은 뺐다(앞 6달이 넘치면 거의 빈 쪽이 생겼다). 칸은 쪽 사이에서 나뉘지 않는다(break-inside) */
 @media print{
-  [data-mode="pdf"] [data-section="months"],[data-mode="pdf"] [data-section="seasons"],[data-mode="pdf"] [data-section="years"]{break-before:page}
-  [data-mode="pdf"] [data-section="months"] [data-period-group="6"]{break-before:page}
+  [data-mode="pdf"] [data-section="months"],[data-mode="pdf"] [data-section="seasons"],[data-mode="pdf"] [data-section="years"]{break-before:page;gap:6px}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .period-group{display:grid!important;grid-template-columns:auto 1fr;column-gap:10px;row-gap:2px!important}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .period-group>*{grid-column:1/-1}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="years"]) .period-group>.h3{grid-column:1}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="years"]) .period-group>.period-flow{grid-column:2;align-self:end}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .h3{font-size:12.5px;margin:0}
+  [data-mode="pdf"] [data-section="years"]{gap:4px}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .period-chip{font-size:9.5px;padding:1px 5px}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .period-flow{font-size:10.5px}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .period-fact{font-size:10.5px;line-height:1.4;color:var(--muted)}
+  [data-mode="pdf"] :is([data-section="months"],[data-section="seasons"],[data-section="years"]) .sentences{gap:2px;font-size:11.5px;line-height:1.45}
+  [data-mode="pdf"] [data-section="months"] .period-cluster{margin:2px 0 0;padding-top:4px;font-size:11.5px}
 }
 
 /* 대기 화면 칸별 진행 표시(D-052) */

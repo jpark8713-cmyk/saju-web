@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { PaymentMethod } from '../../config/paymentMethods';
 import { DOWNLOAD_LINK_TTL_TEXT } from '../../config/delivery';
 import { REFUND_POLICY_SUMMARY } from '../../config/legal';
+import { payFailureMessage } from '../../web/paymentMessages';
 import { load, orderHeaders, save, type SavedOrder } from '../../web/session';
 
 const won = (n: number) => `${n.toLocaleString('ko-KR')}원`;
@@ -44,7 +45,7 @@ export function Checkout({ methods, paymentReady }: { methods: PaymentMethod[]; 
         headers: orderHeaders(order.accessToken),
         body: JSON.stringify({ orderId: order.orderId, paymentMethod: method }),
       });
-      const data = (await res.json()) as { redirectUrl?: string; error?: string };
+      const data = (await res.json()) as { redirectUrl?: string; error?: string; code?: string };
       if (res.ok && data.redirectUrl) {
         save('saju.order', { ...order, paymentMethod: method });
         window.location.assign(data.redirectUrl);
@@ -52,6 +53,11 @@ export function Checkout({ methods, paymentReady }: { methods: PaymentMethod[]; 
       }
       if (data.error === 'already_paid') {
         router.push(`/orders/${order.orderId}`);
+        return;
+      }
+      // 거절 이유가 있으면 그 문구로(예: 주문 30일이 지나 출생 정보를 지운 주문은 새로 주문하라고 안내, D-054)
+      if (data.error === 'payment_rejected' && data.code) {
+        setError(payFailureMessage(data.code));
         return;
       }
       setError(res.status === 409 ? '결제를 처리하고 있어요. 잠시 후 다시 시도해 주세요.' : '결제를 시작하지 못했어요. 다시 시도해 주세요.');
@@ -69,6 +75,12 @@ export function Checkout({ methods, paymentReady }: { methods: PaymentMethod[]; 
           <span>기본 리포트</span>
           <span>{won(order.breakdown.base)}</span>
         </div>
+        {!!order.breakdown.periods && (
+          <div className="total" style={{ fontWeight: 400, fontSize: 14 }}>
+            <span>월별·10년 흐름</span>
+            <span>{won(order.breakdown.periods)}</span>
+          </div>
+        )}
         {order.breakdown.topics.map((t) => (
           <div key={t.id} className="total" style={{ fontWeight: 400, fontSize: 14 }}>
             <span>{t.label} 풀이</span>

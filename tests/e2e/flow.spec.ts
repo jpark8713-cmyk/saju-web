@@ -271,10 +271,12 @@ test('PDF: 각주 번호와 사실 목록이 화면과 일치하고 Noto 글꼴�
   expect(await print.locator('.ref-button').count()).toBe(0);
   const sections = await print.locator('[data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
   expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
-  // D-052: PDF에서 월별 흐름은 새 쪽에서 시작해 7번째 달에서 한 번 더 넘기고(2쪽), 10년 흐름도 새 쪽(1쪽)
+  // D-052: PDF에서 월별·10년 흐름은 새 쪽에서 시작하고, 칸은 쪽 사이에서 나뉘지 않는다(3단계: 7번째 달 강제 넘김은 뺐다. 실제 쪽수는 PDF로 확인: 월별 2쪽·10년 1쪽)
   await print.emulateMedia({ media: 'print' });
-  const breaks = await print.evaluate(() => ['[data-section="months"]', '[data-section="months"] [data-period-group="6"]', '[data-section="years"]'].map((q) => getComputedStyle(document.querySelector(q)!).breakBefore));
-  expect(breaks).toEqual(['page', 'page', 'page']);
+  const breaks = await print.evaluate(() => ['[data-section="months"]', '[data-section="years"]'].map((q) => getComputedStyle(document.querySelector(q)!).breakBefore));
+  expect(breaks).toEqual(['page', 'page']);
+  const inside = await print.evaluate(() => getComputedStyle(document.querySelector('[data-section="months"] [data-period-group="6"]')!).breakInside);
+  expect(inside).toBe('avoid');
   // PDF에는 링크 대신 안내 문구만
   await expect(print.locator('[data-section="yearly"] .period-link')).toHaveCount(0);
   await expect(print.locator('[data-section="years"] .period-link')).toHaveCount(0);

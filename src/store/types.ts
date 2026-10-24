@@ -23,6 +23,14 @@ export interface PaymentState {
   cancelledAt: string | null;
   /** 마지막 승인 실패 이유 코드 (사용자 입력 없음) */
   lastError: string | null;
+  /**
+   * 승인 여부를 모르는 결제(D-054): 승인 요청이 PG 연결 오류로 끝난 결제 키들과 처음 그렇게 된 시각.
+   * 결제창을 다시 열거나 다른 오류가 나도 지우지 않는다. 그 결제 키가 실제로 승인되면 그 키만 뺀다(나머지는 운영자가 PG에서 확인).
+   * 예전 주문 기록에는 없다
+   */
+  uncertain?: { since: string; paymentKeys: string[] } | null;
+  /** 운영자가 승인 여부 모름 결제를 PG에서 확인한 기록(관리 명령 payments resolve, D-054) */
+  uncertainChecks?: { paymentKey: string | null; result: 'not-approved' | 'approved-cancelled' | 'approved-kept'; at: string; note: string | null }[];
 }
 
 /** 결과물 전달 상태 (SPEC Phase 5, D-033) */
@@ -208,6 +216,10 @@ export interface Store {
   revokeDownloadToken(tokenHash: string, at: string): Promise<void>;
   /** 완성(done)되지 않았고 이메일이 남아 있으며 createdBefore 이전에 만든 주문 (이메일 정리용, D-034) */
   listUnfinishedOrdersWithEmail(createdBefore: Date): Promise<Order[]>;
+  /** 완성되지 않았고 출생 정보가 남은 주문 중 결제 시각(없으면 주문 시각)이 before 이전인 것 */
+  listUnfinishedOrdersWithBirth(before: Date): Promise<Order[]>;
+  /** 승인 여부를 모르는 결제가 남은 주문(D-054, 예전 기록의 lastError PG_UNREACHABLE 포함) */
+  listOrdersWithUncertainPayment(): Promise<Order[]>;
   appendDeliveryLog(log: DeliveryLog): Promise<void>;
   listDeliveryLogs(orderId: string): Promise<DeliveryLog[]>;
   findRefundByOrder(orderId: string): Promise<RefundRequest | null>;

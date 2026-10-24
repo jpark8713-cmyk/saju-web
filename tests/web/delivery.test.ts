@@ -13,7 +13,7 @@ import { purgeExpired } from '../../src/delivery/purge';
 import { requestResend, RESEND_MESSAGE } from '../../src/delivery/resend';
 import { deliveryOf, withDelivery } from '../../src/delivery/state';
 import { createOrder } from '../../src/orders/create';
-import { orderStatus, startGeneration } from '../../src/orders/generation';
+import { orderStatus, RetryLimitReached, startGeneration } from '../../src/orders/generation';
 import { hashToken } from '../../src/orders/ids';
 import { reportViewFor, ReportExpired } from '../../src/orders/reportAccess';
 import { MemoryStore } from '../../src/store/memory';
@@ -418,6 +418,75 @@ describe('4차 수정 (D-034)', () => {
     // 완성된 주문은 완성일 기준(이번 정리에서 함께 지워졌는지는 완성일 + 30일로 정해진다)
     const doneOrderNow = (await store.getOrder(done.orderId))!;
     expect(doneOrderNow.status).toBe('done');
+  });
+
+  it('완성되지 않은 주문의 출생 정보는 결제한 날부터 30일 뒤 지우고, 그 뒤에는 다시 생성할 수 없다(환불 안내)', async () => {
+    for (const store of [new MemoryStore(), new SqliteStore(join(tempDir(), 'birth.db'))] as Store[]) {
+      const { deps } = makeDeps(store);
+      mockEnv();
+      const failed = await paidOrder(store);
+      await (await startGeneration(store, failed.orderId, failed.accessToken, runtime('fail'))).job;
+      const unpaid = await createOrder(store, ORDER());
+      const done = await doneOrder(store, deps);
+      const paidAt = Date.parse((await store.getOrder(failed.orderId))!.paidAt!);
+      const day = 86_400_000;
+      // 29일째: 남긴다(다시 생성할 수 있다)
+      expect((await purgeExpired(store, deps.pdfs, new Date(paidAt + 29 * day))).unfinishedBirths).toBe(0);
+      expect((await orderStatus(store, failed.orderId, failed.accessToken)).canRetry).toBe(true);
+      // 30일 + 1분: 결제한 실패 주문과 결제 전 주문의 출생 정보를 지운다. 완성된 주문은 완성 때 이미 지웠다
+      const r = await purgeExpired(store, deps.pdfs, new Date(paidAt + 30 * day + 60_000));
+      expect(r.unfinishedBirths).toBe(2);
+      expect((await store.getOrder(failed.orderId))!.pendingBirth).toBeNull();
+      expect((await store.getOrder(unpaid.orderId))!.pendingBirth).toBeNull();
+      expect((await store.getOrder(done.orderId))!.pendingBirth).toBeNull();
+      expect(JSON.stringify(await store.getOrder(failed.orderId))).not.toContain(BIRTH.name);
+      // 주문 기록(번호·금액·상태)은 남는다
+      expect((await store.getOrder(failed.orderId))!.status).toBe('failed');
+      // 다시 생성할 수 없고 환불 안내로 간다
+      expect((await orderStatus(store, failed.orderId, failed.accessToken)).canRetry).toBe(false);
+      await expect(startGeneration(store, failed.orderId, failed.accessToken, runtime())).rejects.toBeInstanceOf(RetryLimitReached);
+      // 임시 폴더를 지우기 전에 DB 파일을 닫는다(윈도에서 열린 파일은 지울 수 없다)
+      if (store instanceof SqliteStore) store.close();
+    }
+  });
+
+  it('출생 정보 정리는 결제 승인 중 주문을 건드리지 않고, 승인 여부 모름 주문은 60일까지 미루며, SQLite의 빈·이상한 시각은 대상에서 뺀다', async () => {
+    const day = 86_400_000;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const store = new SqliteStore(join(tempDir(), 'odd.db'));
+    const { deps } = makeDeps(store);
+    mockEnv();
+    const confirming = await createOrder(store, ORDER());
+    const unreachable = await createOrder(store, ORDER());
+    const emptyPaid = await createOrder(store, ORDER());
+    const oddCreated = await createOrder(store, ORDER());
+    const created = Date.parse((await store.getOrder(confirming.orderId))!.createdAt);
+    await store.updateOrder(confirming.orderId, (o) => ({ ...o, payment: { ...o.payment, stage: 'confirming', confirmingAt: new Date(created).toISOString() } }));
+    await store.updateOrder(unreachable.orderId, (o) => ({ ...o, payment: { ...o.payment, stage: 'ready', lastError: 'PG_UNREACHABLE' } }));
+    const held = await createOrder(store, ORDER());
+    // 전용 칸: 결제창을 다시 열어 lastError가 지워져도 칸이 남아 정리를 미룬다
+    await store.updateOrder(held.orderId, (o) => ({ ...o, payment: { ...o.payment, stage: 'ready', lastError: null, uncertain: { since: new Date(created).toISOString(), paymentKeys: ['pk_old'] } } }));
+    // 빈 paidAt은 주문 시각으로 센다(즉시 지우지 않는다)
+    await store.updateOrder(emptyPaid.orderId, (o) => ({ ...o, paidAt: '' }));
+    await store.updateOrder(oddCreated.orderId, (o) => ({ ...o, createdAt: 'not-a-date' }));
+    expect((await purgeExpired(store, deps.pdfs, new Date(created + 29 * day))).unfinishedBirths).toBe(0);
+    expect((await store.getOrder(emptyPaid.orderId))!.pendingBirth).not.toBeNull();
+    const r = await purgeExpired(store, deps.pdfs, new Date(created + 31 * day));
+    expect(r.unfinishedBirths).toBe(1);
+    expect((await store.getOrder(emptyPaid.orderId))!.pendingBirth).toBeNull();
+    expect((await store.getOrder(confirming.orderId))!.pendingBirth).not.toBeNull();
+    // PG 연결 오류로 승인 여부를 모르는 주문도 남긴다
+    expect((await store.getOrder(unreachable.orderId))!.pendingBirth).not.toBeNull();
+    expect((await store.getOrder(held.orderId))!.pendingBirth).not.toBeNull();
+    // 24시간 넘게 남은 승인 여부 모름 결제는 정리 때마다 세고 운영 로그(주문번호만)
+    expect(r.uncertainPayments).toBe(2);
+    // 상한 60일이 지나면 운영자 확인과 상관없이 지운다
+    const late = await purgeExpired(store, deps.pdfs, new Date(created + 61 * day));
+    expect(late.unfinishedBirths).toBe(2);
+    expect((await store.getOrder(held.orderId))!.pendingBirth).toBeNull();
+    expect((await store.getOrder(unreachable.orderId))!.pendingBirth).toBeNull();
+    expect((await store.getOrder(oddCreated.orderId))!.pendingBirth).not.toBeNull();
+    store.close();
   });
 
   it('보관 기간이 지났으면 정리 전이라도 화면 리포트·PDF를 보여 주지 않는다', async () => {

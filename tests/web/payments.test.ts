@@ -10,7 +10,9 @@ import { createOrder, OrderInputError } from '../../src/orders/create';
 import { NotPaid, orderStatus, recoverStuckOrders, RetryLimitReached, startGeneration } from '../../src/orders/generation';
 import { recordIssuanceEvent, reportContentHash } from '../../src/orders/issuance';
 import { CONFIRM_LOCK_STALE_MS, confirmPayment, PaymentInProgress, PaymentRejected, PaymentUnavailable, preparePayment } from '../../src/orders/payment';
+import { runAdmin } from '../../src/admin/cli';
 import { MAX_JSON_BYTES, readJson } from '../../src/web/http';
+import { payFailureMessage } from '../../src/web/paymentMessages';
 import { canTransition, InvalidTransition, transition } from '../../src/orders/stateMachine';
 import { getPaymentProvider } from '../../src/payments';
 import { MockPaymentProvider } from '../../src/payments/mock';
@@ -376,7 +378,8 @@ describe('발급 기록', () => {
     await (await startGeneration(store, o.orderId, o.accessToken, runtime())).job;
     await recordIssuanceEvent(store, o.orderId, 'pdf_download');
     const text = JSON.stringify(await store.getIssuance(o.orderId)) + '\n' + logs.join('\n');
-    for (const needle of [BIRTH.name, email, label, '1990', '5월 15일', '14:30', 'busan', '부산']) expect(text).not.toContain(needle);
+    // 연도 숫자만(1990)으로 찾으면 무작위 해시·키에 우연히 들어가 가끔 실패했다. 원문에 쓰이는 꼴로 찾는다
+    for (const needle of [BIRTH.name, email, label, '1990년', '1990-05-15', '"year":1990', '5월 15일', '14:30', 'busan', '부산']) expect(text).not.toContain(needle);
   });
 });
 
@@ -459,5 +462,194 @@ describe('주문 상태 머신', () => {
 
   it('PaymentRejected 코드에는 사용자 입력이 들어가지 않는다', () => {
     expect(new PaymentRejected('AMOUNT_MISMATCH').message).toBe('결제 승인 거부: AMOUNT_MISMATCH');
+  });
+});
+
+describe('출생 정보가 지워진 결제 전 주문(D-054: 주문 30일 뒤 정리)', () => {
+  const dropBirth = (store: MemoryStore, id: string) => store.updateOrder(id, (o) => ({ ...o, pendingBirth: null }));
+
+  it('결제만 하고 생성을 시작하지 않은 주문도 출생 정보가 지워지면 다시 생성하지 않고 환불 안내로 간다', async () => {
+    const store = new MemoryStore();
+    const o = await paidOrder(store);
+    await dropBirth(store, o.orderId);
+    await expect(startGeneration(store, o.orderId, o.accessToken, runtime())).rejects.toBeInstanceOf(RetryLimitReached);
+    const after = (await store.getOrder(o.orderId))!;
+    expect(after.status).toBe('paid');
+    expect(after.generation.runs).toBe(0);
+  });
+
+  it('PG 연결 오류 이력이 있는 주문이 승인 요청에서 만료로 거절되면 단정하지 않는 코드·표시·운영 확인 로그(주문번호만)를 남긴다', async () => {
+    const store = new MemoryStore();
+    const provider = new MockPaymentProvider();
+    const o = await newOrder(store);
+    const { paymentKey, returnedAmount } = await authorizeViaMock(store, provider, o);
+    await store.updateOrder(o.orderId, (x) => ({ ...x, pendingBirth: null, payment: { ...x.payment, lastError: 'PG_UNREACHABLE' } }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const err = await confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount }).catch((e) => e);
+    expect((err as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    expect(provider.confirmCalls).toBe(0);
+    // 결제 상태는 건드리지 않고 거절한다(승인 여부 모름 이력이 그대로 남아 다시 와도 같은 안내)
+    expect((await store.getOrder(o.orderId))!.payment.lastError).toBe('PG_UNREACHABLE');
+    const line = warn.mock.calls.map((c) => String(c[0])).find((m) => m.startsWith('[결제 확인 필요]'));
+    expect(line).toContain(o.orderId);
+    expect(line).not.toContain(BIRTH.name);
+    // 문구는 "돈은 빠져나가지 않았어요"라고 단정하지 않는다
+    expect(payFailureMessage('ORDER_EXPIRED_CHECK')).not.toContain('빠져나가지 않았어요');
+  });
+
+  it('PG 연결 오류 이력이 있는 주문은 결제창을 다시 열 때도 단정하지 않는 코드로 거절하고, 다시 와도 표시가 남아 같은 코드다', async () => {
+    const store = new MemoryStore();
+    const o = await newOrder(store);
+    await store.updateOrder(o.orderId, (x) => ({ ...x, pendingBirth: null, payment: { ...x.payment, stage: 'ready', lastError: 'PG_UNREACHABLE' } }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const prep = () => preparePayment(store, new MockPaymentProvider(), { orderId: o.orderId, token: o.accessToken, methodId: 'kakaopay', origin: () => 'http://x' }).catch((e) => e);
+    // 예전 기록(전용 칸 없이 lastError만 있는 주문)도 단정하지 않는 코드로 거절한다
+    expect(((await prep()) as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    expect(((await prep()) as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[결제 확인 필요]'))).toHaveLength(2);
+  });
+
+  it('결제창을 열 때 거절하고 새로 주문하게 한다', async () => {
+    const store = new MemoryStore();
+    const o = await newOrder(store);
+    await dropBirth(store, o.orderId);
+    const err = await preparePayment(store, new MockPaymentProvider(), { orderId: o.orderId, token: o.accessToken, methodId: 'kakaopay', origin: () => 'http://x' }).catch((e) => e);
+    expect(err).toBeInstanceOf(PaymentRejected);
+    expect((err as PaymentRejected).code).toBe('ORDER_EXPIRED');
+  });
+
+  it('결제창을 연 뒤 정리됐으면 승인 요청을 PG에 보내지 않는다(돈이 빠져나가지 않는다)', async () => {
+    const store = new MemoryStore();
+    const provider = new MockPaymentProvider();
+    const o = await newOrder(store);
+    const { paymentKey, returnedAmount } = await authorizeViaMock(store, provider, o);
+    await dropBirth(store, o.orderId);
+    const err = await confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount }).catch((e) => e);
+    expect((err as PaymentRejected).code).toBe('ORDER_EXPIRED');
+    expect(provider.confirmCalls).toBe(0);
+    const after = (await store.getOrder(o.orderId))!;
+    expect(after.status).toBe('created');
+    // 승인 요청 전에 거절해 결제 상태는 그대로다(결제창을 다시 열어도 결제창 열기에서 같은 이유로 거절된다)
+    expect(after.payment.stage).toBe('ready');
+  });
+});
+
+describe('승인 여부를 모르는 결제(D-054: 전용 칸)', () => {
+  /** 승인 요청을 한 번 PG 연결 오류로 끝낸 주문 */
+  async function unreachableOnce(store: MemoryStore, provider = new MockPaymentProvider()) {
+    const o = await newOrder(store);
+    const { paymentKey, returnedAmount } = await authorizeViaMock(store, provider, o);
+    const spy = vi.spyOn(provider, 'confirm').mockRejectedValueOnce(new Error('network'));
+    await expect(confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount })).rejects.toMatchObject({ code: 'PG_UNREACHABLE' });
+    spy.mockRestore();
+    return { o, provider, paymentKey, returnedAmount };
+  }
+
+  it('PG 연결 오류로 끝난 결제 키를 전용 칸에 남기고, 결제창 재열기·다른 오류에도 지우지 않는다', async () => {
+    const store = new MemoryStore();
+    const { o, provider, paymentKey } = await unreachableOnce(store);
+    const first = (await store.getOrder(o.orderId))!.payment.uncertain!;
+    expect(first.paymentKeys).toEqual([paymentKey]);
+    // 결제창을 다시 열어도 남는다
+    const again = await authorizeViaMock(store, provider, o, 'fail');
+    expect((await store.getOrder(o.orderId))!.payment.uncertain).toEqual(first);
+    // 다른 오류(카드 거절)로 끝나도 남는다
+    await expect(confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey: again.paymentKey, amount: again.returnedAmount })).rejects.toBeInstanceOf(PaymentRejected);
+    expect((await store.getOrder(o.orderId))!.payment.uncertain).toEqual(first);
+  });
+
+  it('같은 결제 키가 실제로 승인되면 그 키를 칸에서 빼고, 다른 결제 키로 승인되면 남긴다(이중 결제 확인용)', async () => {
+    const same = new MemoryStore();
+    const a = await unreachableOnce(same);
+    await confirmPayment(same, a.provider, { orderId: a.o.orderId, token: a.o.accessToken, paymentKey: a.paymentKey, amount: a.returnedAmount });
+    expect((await same.getOrder(a.o.orderId))!.payment.uncertain).toBeNull();
+
+    const other = new MemoryStore();
+    const b = await unreachableOnce(other);
+    const next = await authorizeViaMock(other, b.provider, b.o);
+    await confirmPayment(other, b.provider, { orderId: b.o.orderId, token: b.o.accessToken, paymentKey: next.paymentKey, amount: next.returnedAmount });
+    const after = (await other.getOrder(b.o.orderId))!;
+    expect(after.status).toBe('paid');
+    expect(after.payment.uncertain?.paymentKeys).toEqual([b.paymentKey]);
+  });
+
+  it('만료 뒤에는 결제창 열기·승인 요청·같은 결제의 다시 온 승인 요청 모두 "결제 확인 필요"로 거절하고 PG를 부르지 않는다', async () => {
+    const store = new MemoryStore();
+    const { o, provider, paymentKey, returnedAmount } = await unreachableOnce(store);
+    await store.updateOrder(o.orderId, (x) => ({ ...x, pendingBirth: null }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls = provider.confirmCalls;
+    const req = { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount };
+    expect(((await confirmPayment(store, provider, req).catch((e) => e)) as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    // 같은 결제를 다시 승인 요청해도 같은 안내(예전에는 결제 키 검사에 먼저 걸려 일반 실패 문구였다)
+    expect(((await confirmPayment(store, provider, req).catch((e) => e)) as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    const prep = await preparePayment(store, provider, { orderId: o.orderId, token: o.accessToken, methodId: 'kakaopay', origin: () => 'http://x' }).catch((e) => e);
+    expect((prep as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+    expect(provider.confirmCalls).toBe(calls);
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[결제 확인 필요]'))).toHaveLength(3);
+    expect((await store.getOrder(o.orderId))!.payment.uncertain?.paymentKeys).toEqual([paymentKey]);
+  });
+
+  it('승인 여부를 모르는 결제가 없는 만료 주문의 문구는 결제 여부를 단정하지 않는다', () => {
+    expect(payFailureMessage('ORDER_EXPIRED')).toContain('결제는 진행하지 않았어요');
+    expect(payFailureMessage('ORDER_EXPIRED')).toContain('고객센터');
+    for (const code of ['ORDER_EXPIRED', 'ORDER_EXPIRED_CHECK']) expect(payFailureMessage(code)).not.toContain('빠져나가지 않았어요');
+  });
+});
+
+describe('승인 여부 모름: 취소 실패와 운영자 확인(D-054 리뷰 MEDIUM 2건)', () => {
+  it('승인 금액이 달라 취소했는데 취소까지 실패하면 그 결제 키를 승인 여부 모름 칸에 넣는다(경고·보류·"결제 확인 필요")', async () => {
+    const store = new MemoryStore();
+    const provider = new MockPaymentProvider();
+    const o = await newOrder(store);
+    const { paymentKey, returnedAmount } = await authorizeViaMock(store, provider, o);
+    vi.spyOn(provider, 'confirm').mockResolvedValueOnce({ ok: true, transactionId: 'tx', approvedAmount: o.amount + 1, approvedAt: new Date().toISOString() } as ConfirmResult);
+    vi.spyOn(provider, 'cancel').mockRejectedValueOnce(new Error('network'));
+    await expect(confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount })).rejects.toMatchObject({ code: 'APPROVED_AMOUNT_MISMATCH' });
+    const after = (await store.getOrder(o.orderId))!;
+    expect(after.payment.lastError).toBe('APPROVED_AMOUNT_MISMATCH_CANCEL_FAILED');
+    expect(after.payment.uncertain?.paymentKeys).toEqual([paymentKey]);
+    expect((await store.listOrdersWithUncertainPayment()).map((x) => x.id)).toEqual([o.orderId]);
+    // 만료 뒤 거절은 "결제 확인 필요"
+    await store.updateOrder(o.orderId, (x) => ({ ...x, pendingBirth: null }));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const err = await preparePayment(store, provider, { orderId: o.orderId, token: o.accessToken, methodId: 'kakaopay', origin: () => 'http://x' }).catch((e) => e);
+    expect((err as PaymentRejected).code).toBe('ORDER_EXPIRED_CHECK');
+  });
+
+  it('취소에 성공하면 승인 여부 모름 칸에 넣지 않는다', async () => {
+    const store = new MemoryStore();
+    const provider = new MockPaymentProvider();
+    const o = await newOrder(store);
+    const { paymentKey, returnedAmount } = await authorizeViaMock(store, provider, o);
+    vi.spyOn(provider, 'confirm').mockResolvedValueOnce({ ok: true, transactionId: 'tx', approvedAmount: o.amount + 1, approvedAt: new Date().toISOString() } as ConfirmResult);
+    vi.spyOn(provider, 'cancel').mockResolvedValueOnce({ ok: true, cancelledAt: new Date().toISOString() } as never);
+    await expect(confirmPayment(store, provider, { orderId: o.orderId, token: o.accessToken, paymentKey, amount: returnedAmount })).rejects.toBeInstanceOf(PaymentRejected);
+    expect((await store.getOrder(o.orderId))!.payment.uncertain ?? null).toBeNull();
+  });
+
+  it('운영자가 PG에서 확인한 결과를 기록하면 그 키가 빠지고, 모두 빠지면 경고 대상에서 빠진다(예전 기록 포함)', async () => {
+    const store = new MemoryStore();
+    const o = await newOrder(store);
+    await store.updateOrder(o.orderId, (x) => ({ ...x, payment: { ...x.payment, uncertain: { since: new Date().toISOString(), paymentKeys: ['pk_a', 'pk_b'] } } }));
+    const lines: string[] = [];
+    const run = (argv: string[]) => runAdmin(argv, { store, provider: null, out: (l) => lines.push(l) });
+    expect(await run(['payments', 'uncertain'])).toBe(0);
+    expect(lines.join('\n')).toContain('pk_a');
+    expect(await run(['payments', 'resolve', o.orderId, '--result', 'not-approved', '--key', 'pk_a', '--note', 'PG 화면 미승인'])).toBe(0);
+    expect((await store.getOrder(o.orderId))!.payment.uncertain?.paymentKeys).toEqual(['pk_b']);
+    expect(await run(['payments', 'resolve', o.orderId, '--result', 'approved-cancelled'])).toBe(0);
+    const after = (await store.getOrder(o.orderId))!;
+    expect(after.payment.uncertain).toBeNull();
+    expect(after.payment.uncertainChecks?.map((c) => [c.paymentKey, c.result])).toEqual([['pk_a', 'not-approved'], ['pk_b', 'approved-cancelled']]);
+    expect(await store.listOrdersWithUncertainPayment()).toEqual([]);
+    // 없는 키·결과 값·대상 아님은 오류
+    expect(await run(['payments', 'resolve', o.orderId, '--result', 'not-approved'])).toBe(1);
+    expect(await run(['payments', 'resolve', o.orderId, '--result', 'oops'])).toBe(1);
+    // 예전 기록(lastError만 있는 주문)도 끝낼 수 있다
+    const legacy = await newOrder(store);
+    await store.updateOrder(legacy.orderId, (x) => ({ ...x, payment: { ...x.payment, lastError: 'PG_UNREACHABLE' } }));
+    expect(await run(['payments', 'resolve', legacy.orderId, '--result', 'not-approved'])).toBe(0);
+    expect(await store.listOrdersWithUncertainPayment()).toEqual([]);
   });
 });

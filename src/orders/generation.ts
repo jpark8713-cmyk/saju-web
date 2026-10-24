@@ -57,7 +57,8 @@ export function statusView(o: Order): OrderStatusView {
     status: o.status,
     stage,
     runs: o.generation.runs,
-    canRetry: o.status === 'failed' && o.generation.runs < MAX_GENERATION_RUNS,
+    // 출생 정보 보관 기간(30일)이 지나 지워졌으면 다시 생성할 수 없다(환불 안내)
+    canRetry: o.status === 'failed' && o.generation.runs < MAX_GENERATION_RUNS && !!o.pendingBirth,
     deliveryMethods: o.deliveryMethods,
     expiresAt: d.expiresAt,
     emailStatus: d.email.status,
@@ -172,14 +173,19 @@ export async function startGeneration(
   const order = await recoverIfStale(store, await authorizedOrder(store, orderId, token), now);
   if (order.status === 'created' || order.status === 'refunded') throw new NotPaid();
   if (order.status === 'failed' && order.generation.runs >= MAX_GENERATION_RUNS) throw new RetryLimitReached();
+  // 보관 기간이 지나 출생 정보를 지운 미완성 주문은 다시 생성할 수 없다(재시도 한도와 같이 환불 안내로 보낸다)
+  if ((order.status === 'failed' || order.status === 'paid') && !order.pendingBirth) throw new RetryLimitReached();
   const flag = { started: false };
   const updated = await store.updateOrder(orderId, (o) => {
     if ((o.status !== 'paid' && o.status !== 'failed') || !canTransition(o.status, 'generating')) return o;
     if (o.generation.runs >= MAX_GENERATION_RUNS) return o;
+    // 확인한 뒤 정리 작업이 출생 정보를 지웠으면 시작하지 않는다(시도 횟수를 쓰지 않는다, D-054 리뷰)
+    if (!o.pendingBirth) return o;
     flag.started = true;
     // 새 실행은 칸별 진행 표시를 처음부터 다시 쓴다(D-052)
     return transition(o, 'generating', { generation: { ...o.generation, runs: o.generation.runs + 1, startedAt: now.toISOString(), finishedAt: null, progress: [] } });
   });
+  if (!flag.started && updated && (updated.status === 'failed' || updated.status === 'paid') && !updated.pendingBirth) throw new RetryLimitReached();
   const job = flag.started && updated ? run(store, updated, runtimeFor(updated), onDone) : null;
   return { status: statusView(updated ?? order), job };
 }

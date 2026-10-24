@@ -76,6 +76,13 @@ describe('가격과 주문 생성', () => {
     expect(priceFor(['nope']).total).toBe(PRICES.base);
   });
 
+  it('상품 구성(D-054): 월별·10년 흐름 가격을 따로 정하면 합계에 더하고, 0이면 기본가에 포함된다', () => {
+    expect(PRICES.periods).toBe(0);
+    expect(priceFor(['wealth'])).toMatchObject({ periods: 0, total: PRICES.base + PRICES.perTopic });
+    const table = { ...PRICES, base: 9_000, periods: 4_000 };
+    expect(priceFor(['wealth'], table)).toMatchObject({ base: 9_000, periods: 4_000, total: 9_000 + 4_000 + PRICES.perTopic });
+  });
+
   it('클라이언트가 보낸 금액은 무시하고 서버가 계산한다', async () => {
     const store = new MemoryStore();
     const o = await createOrder(store, { ...ORDER(), amount: 1, total: 1 });

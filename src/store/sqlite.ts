@@ -194,6 +194,25 @@ export class SqliteStore implements Store {
     return rows.map((r) => parse<Order>(r)!);
   }
 
+  async listOrdersWithUncertainPayment(): Promise<Order[]> {
+    const rows = this.db
+      .prepare("SELECT data FROM orders WHERE json_array_length(json_extract(data, '$.payment.uncertain.paymentKeys')) > 0 OR json_extract(data, '$.payment.lastError') = 'PG_UNREACHABLE'")
+      .all() as Row[];
+    return rows.map((r) => parse<Order>(r)!);
+  }
+
+  async listUnfinishedOrdersWithBirth(before: Date): Promise<Order[]> {
+    const rows = this.db
+      // 빈 문자열·ISO 형식이 아닌 시각은 대상에서 뺀다(문자열 비교라 이상값이 "오래된 주문"으로 잡혀 지워지지 않게, D-054 리뷰)
+      .prepare(
+        "SELECT data FROM orders WHERE status <> 'done' AND json_extract(data, '$.pendingBirth') IS NOT NULL " +
+          "AND COALESCE(NULLIF(json_extract(data, '$.paidAt'), ''), json_extract(data, '$.createdAt')) GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*' " +
+          "AND COALESCE(NULLIF(json_extract(data, '$.paidAt'), ''), json_extract(data, '$.createdAt')) <= ?",
+      )
+      .all(before.toISOString()) as Row[];
+    return rows.map((r) => parse<Order>(r)!);
+  }
+
   async appendDeliveryLog(log: DeliveryLog): Promise<void> {
     this.db.prepare('INSERT INTO delivery_logs (order_id, data) VALUES (?, ?)').run(log.orderId, JSON.stringify(log));
   }

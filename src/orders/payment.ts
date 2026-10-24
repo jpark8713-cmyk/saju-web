@@ -53,10 +53,44 @@ export interface PrepareRequest {
   origin: () => string;
 }
 
+/**
+ * 승인 여부를 모르는 결제(D-054): PG 연결 오류로 끝난 승인 요청이 있었던 주문. 전용 칸(payment.uncertain)으로 본다.
+ * lastError 검사는 그 칸이 생기기 전의 주문 기록을 위한 것이다. 이런 주문이 출생 정보 보관 기간을 넘겨 거절될 때는
+ * 결제 여부를 단정하지 않는 코드(ORDER_EXPIRED_CHECK)로 답하고 운영 확인 로그를 남긴다
+ */
+const EXPIRED_UNCERTAIN = 'ORDER_EXPIRED_AFTER_PG_UNREACHABLE';
+export const paymentUncertain = (p: PaymentState) => !!p.uncertain?.paymentKeys.length || p.lastError === 'PG_UNREACHABLE' || p.lastError === EXPIRED_UNCERTAIN;
+const warnUncertain = (orderId: string) =>
+  console.warn(`[결제 확인 필요] ${orderId}: 승인 여부를 모르는 결제가 있는 주문이 출생 정보 보관 기간을 넘겨 결제를 거절함. PG에서 승인 여부를 확인하고, 승인됐으면 취소해 주세요`);
+
+/** 승인 여부 모름 칸에 결제 키를 넣는다(이미 있으면 그대로). 처음 넣는 시각을 since로 둔다 */
+function addKey(u: PaymentState['uncertain'], paymentKey: string, now: Date): NonNullable<PaymentState['uncertain']> {
+  if (u?.paymentKeys.includes(paymentKey)) return u;
+  return { since: u?.since ?? now.toISOString(), paymentKeys: [...(u?.paymentKeys ?? []), paymentKey] };
+}
+
+/** 승인 여부 모름 칸에서 승인이 확인된 결제 키를 뺀다. 남은 키가 없으면 비운다 */
+function withoutKey(u: PaymentState['uncertain'], paymentKey: string): PaymentState['uncertain'] {
+  if (!u) return null;
+  const rest = u.paymentKeys.filter((k) => k !== paymentKey);
+  return rest.length ? { ...u, paymentKeys: rest } : null;
+}
+
+/** 출생 정보가 지워진 결제 전 주문의 거절(결제를 진행하지 않는다) */
+function rejectExpired(orderId: string, p: PaymentState): never {
+  if (paymentUncertain(p)) {
+    warnUncertain(orderId);
+    throw new PaymentRejected('ORDER_EXPIRED_CHECK');
+  }
+  throw new PaymentRejected('ORDER_EXPIRED');
+}
+
 export async function preparePayment(store: Store, provider: PaymentProvider | null, req: PrepareRequest, env: Env = process.env): Promise<{ redirectUrl: string }> {
   if (!provider) throw new PaymentUnavailable();
   const order = await authorizedOrder(store, req.orderId, req.token);
   if (order.status !== 'created') throw new AlreadyPaid();
+  // 결제 전 주문의 출생 정보는 주문 30일 뒤 지운다(D-054). 지운 주문은 결제를 받지 않고 새로 주문하게 한다(받으면 생성할 수 없다)
+  if (!order.pendingBirth) rejectExpired(order.id, order.payment);
   if (order.payment.stage === 'confirming') throw new PaymentInProgress();
   const method = findPaymentMethod(req.methodId, env);
   if (!method?.enabled || !provider.supports(method.id)) throw new OrderInputError({ payment: '선택할 수 없는 결제 수단입니다.' });
@@ -74,8 +108,8 @@ export async function preparePayment(store: Store, provider: PaymentProvider | n
   await store.updateOrder(order.id, (o) => {
     if (o.status !== 'created' || o.payment.stage === 'confirming') return o;
     flag.saved = true;
-    // 결제창을 열 때마다 새 결제 키로 바꾼다. 이전 결제 키로 온 승인 요청은 거부된다
-    return { ...o, paymentMethod: method.id, payment: { ...EMPTY_PAYMENT, provider: provider.id, paymentKey: prepared.paymentKey, stage: 'ready' } };
+    // 결제창을 열 때마다 새 결제 키로 바꾼다. 이전 결제 키로 온 승인 요청은 거부된다. 승인 여부를 모르는 결제 칸(uncertain)은 그대로 둔다(D-054)
+    return { ...o, paymentMethod: method.id, payment: { ...EMPTY_PAYMENT, uncertain: o.payment.uncertain ?? null, provider: provider.id, paymentKey: prepared.paymentKey, stage: 'ready' } };
   });
   if (!flag.saved) throw new PaymentInProgress();
   return { redirectUrl: prepared.redirectUrl };
@@ -129,6 +163,8 @@ export async function confirmPayment(store: Store, provider: PaymentProvider | n
     if (order.payment.stage === 'approved' && order.payment.paymentKey === paymentKey) return { paid: true, alreadyConfirmed: true };
     throw new PaymentRejected('ALREADY_PROCESSED');
   }
+  // 출생 정보가 지워진 주문은 결제 키·단계와 상관없이 같은 안내로 거절한다(다시 온 승인 요청도 "결제 확인 필요", D-054)
+  if (!order.pendingBirth && order.payment.stage !== 'confirming') rejectExpired(order.id, order.payment);
   const canTake = (p: PaymentState) => p.paymentKey === paymentKey && (p.stage === 'ready' || lockIsStale(p, now));
   if (order.payment.stage === 'confirming' && order.payment.paymentKey === paymentKey && !lockIsStale(order.payment, now)) throw new PaymentInProgress();
   if (!canTake(order.payment) || order.payment.provider !== provider.id) {
@@ -145,20 +181,30 @@ export async function confirmPayment(store: Store, provider: PaymentProvider | n
   }
 
   // 승인 중 잠금: 같은 결제 키로 동시에 온 요청 중 하나만 PG에 승인을 요청한다
-  const lock = { taken: false };
+  // 출생 정보가 지워진 주문(D-054)은 PG에 승인을 요청하지 않는다(돈이 빠져나가지 않는다). 확인과 잠금을 한 번에 해서 정리 작업과 겹치지 않게 한다
+  const lock: { taken: boolean; expired: boolean; payment: PaymentState | null } = { taken: false, expired: false, payment: null };
   const lockedAt = now.toISOString();
   await store.updateOrder(order.id, (o) => {
     if (o.status !== 'created' || !canTake(o.payment)) return o;
+    if (!o.pendingBirth) {
+      lock.expired = true;
+      lock.payment = o.payment;
+      return { ...o, payment: { ...o.payment, stage: 'none', confirmingAt: null, lastError: paymentUncertain(o.payment) ? EXPIRED_UNCERTAIN : 'ORDER_EXPIRED' } };
+    }
     lock.taken = true;
     return { ...o, payment: { ...o.payment, stage: 'confirming', confirmingAt: lockedAt, lastError: null } };
   });
+  // 승인 여부를 모르는 결제가 있던 주문이면 결제 여부를 단정하지 않는 코드와 운영 확인 로그(주문번호만)
+  if (lock.expired) rejectExpired(order.id, lock.payment!);
   if (!lock.taken) throw new PaymentInProgress();
 
   let result;
   try {
     result = await provider.confirm({ paymentKey, orderId: order.id, amount: order.amount });
   } catch {
-    // 연결 오류: 승인 여부를 모르므로 같은 결제 키로 다시 요청할 수 있게 둔다(PG 승인은 결제 키 기준 멱등)
+    // 연결 오류: 승인 여부를 모르므로 같은 결제 키로 다시 요청할 수 있게 둔다(PG 승인은 결제 키 기준 멱등).
+    // 그 결제 키를 승인 여부 모름 칸에 남긴다(결제창 재열기·다른 오류가 지우지 않는다, D-054)
+    await store.updateOrder(order.id, (o) => ({ ...o, payment: { ...o.payment, uncertain: addKey(o.payment.uncertain, paymentKey, now) } }));
     return rejectWith(store, order.id, paymentKey, lockedAt, 'ready', 'PG_UNREACHABLE');
   }
   if (!result.ok) return rejectWith(store, order.id, paymentKey, lockedAt, 'none', result.code);
@@ -180,6 +226,8 @@ export async function confirmPayment(store: Store, provider: PaymentProvider | n
               cancelledAt: cancelled.ok ? cancelled.cancelledAt : null,
               // 취소까지 실패하면 운영자가 확인해야 한다
               lastError: cancelled.ok ? 'APPROVED_AMOUNT_MISMATCH' : 'APPROVED_AMOUNT_MISMATCH_CANCEL_FAILED',
+              // 취소 실패는 돈이 나간 상태다: 승인 여부 모름 칸에 넣어 경고 로그·출생 정보 보류·"결제 확인 필요" 안내가 걸리게 한다(D-054 리뷰)
+              uncertain: cancelled.ok ? o.payment.uncertain ?? null : addKey(o.payment.uncertain, paymentKey, now),
             },
           }
         : o,
@@ -193,7 +241,11 @@ export async function confirmPayment(store: Store, provider: PaymentProvider | n
     return transition(o, 'paid', {
       paidAt: now.toISOString(),
       devForceGenerationFailure: devFail,
-      payment: { ...o.payment, stage: 'approved', confirmingAt: null, transactionId: result.transactionId, approvedAmount: result.approvedAmount, approvedAt: result.approvedAt, lastError: null },
+      payment: {
+        ...o.payment, stage: 'approved', confirmingAt: null, transactionId: result.transactionId, approvedAmount: result.approvedAmount, approvedAt: result.approvedAt, lastError: null,
+        // 이 결제 키가 실제로 승인됐으므로 승인 여부 모름에서 뺀다. 다른 결제 키가 남으면 이중 결제일 수 있어 그대로 둔다(운영자가 PG에서 확인)
+        uncertain: withoutKey(o.payment.uncertain, paymentKey),
+      },
     });
   });
   // 잠금을 다시 잡은 다른 요청이 먼저 반영했으면 그 결과를 따른다

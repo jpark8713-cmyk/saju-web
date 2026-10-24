@@ -11,4 +11,5 @@ export const EMPTY_PAYMENT: Readonly<PaymentState> = Object.freeze({
   approvedAt: null,
   cancelledAt: null,
   lastError: null,
+  uncertain: null,
 });

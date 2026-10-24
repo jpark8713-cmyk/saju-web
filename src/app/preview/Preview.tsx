@@ -37,7 +37,11 @@ function OrderBox({ choices, setChoices, onNext, busy, errors, child }: {
       </div>
       <fieldset className="field box" style={{ margin: 0 }}>
         <legend className="label">풀이 주제 (선택)</legend>
-        <div className="hint">기본 리포트(총평·타고난 성향·대운 흐름·올해·내년 흐름) {won(price.base)}</div>
+        {/* D-054: 월별·10년 흐름은 모든 리포트에 들어 있다. 따로 값을 정하면 한 줄로 보여 준다 */}
+        <div className="hint">
+          기본 리포트(총평·타고난 성향·대운 흐름·올해·내년 흐름{price.periods ? '' : `·${child ? '계절별' : '월별'}·10년 흐름`}) {won(price.base)}
+        </div>
+        {!!price.periods && <div className="hint">{child ? '계절별' : '월별'}·10년 흐름 +{won(price.periods)}</div>}
         {topics.map((t) => (
           <label key={t.id} className="check">
             <input type="checkbox" checked={choices.topicIds.includes(t.id)} data-testid={`topic-${t.id}`}
