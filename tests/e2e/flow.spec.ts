@@ -36,6 +36,7 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   // 같은 템플릿: 잠겼던 섹션이 같은 제목으로 열린다
   const sections = await page.locator('[data-testid="report-document"] [data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
   expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
+  await expect(page.getByTestId('basis-counting')).toContainText('지장간은 세지 않습니다');
   // D-052: 월별 흐름 12칸(계절 묶음 머리 4개), 10년 흐름 10칸, 올해·내년 칸 아래 링크 줄
   await expect(page.locator('[data-section="months"] [data-period-group]')).toHaveCount(12);
   await expect(page.locator('[data-section="months"]').getByTestId('period-cluster')).toHaveCount(4);
@@ -114,6 +115,8 @@ test('음력 윤달 + 시간 모름으로 미리보기까지, 없는 윤달은 �
   // 2020년 음력 윤4월은 있다
   await toPreview(page, { calendar: 'lunar', leap: true, year: '2020', month: '4', day: '10', timeUnknown: true });
   await expect(page.getByTestId('saju-chart')).toContainText('모름');
+  // 개수 기준 안내(지장간 제외)는 글자 수 없이 나와 시간 모름(6글자)에서도 그대로 읽힌다
+  await expect(page.getByTestId('basis-counting')).toHaveText('오행·십성 개수는 겉으로 드러난 천간·지지 글자만 셉니다(지장간은 세지 않습니다)');
   // 음력 12월(양력으로는 다음 해 1월)도 받아들인다(D-026)
   await toPreview(page, { calendar: 'lunar', year: '1990', month: '12', day: '10' });
   await expect(page.getByTestId('preview-document')).toContainText('음력 1990년 12월 10일');

@@ -351,6 +351,7 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
           <li>자시 처리: {view.basis.jasi}</li>
           <li>시간 보정: {view.basis.timeCorrection}</li>
           <li>달력: {view.basis.calendar}</li>
+          <li data-testid="basis-counting">{view.basis.counting}</li>
         </ul>
       </section>
     </article>

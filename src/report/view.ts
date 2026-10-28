@@ -64,6 +64,8 @@ export interface CalcBasis {
   jasi: string;
   timeCorrection: string;
   calendar: string;
+  /** 오행·십성 개수를 세는 기준(D-008: 지장간 제외). 글자 수는 넣지 않는다(시간 모름이면 6글자라 문구가 달라지지 않게) */
+  counting: string;
   /** 판정이 갈릴 수 있는 경우의 안내(엔진 notices). 차트 바로 아래에 보여 준다(D-039) */
   notices: { code: string; message: string; details: string[] }[];
 }
@@ -230,6 +232,7 @@ export function calcBasis(chart: SajuChart): CalcBasis {
       chart.input.hasTime ? null : chart.warnings.includes('unknownMinuteOnBoundary') ? '태어난 분 모름(시주 제외)' : '태어난 시간 모름(시주 제외)',
     ].filter((x): x is string => !!x).join(', '),
     calendar: '절기(절입 시각) 기준 년·월주, 한국천문연구원 음력',
+    counting: '오행·십성 개수는 겉으로 드러난 천간·지지 글자만 셉니다(지장간은 세지 않습니다)',
     notices: chart.notices.map((n) => ({ code: n.code, message: n.message, details: noticeDetails(n) })),
   };
 }
