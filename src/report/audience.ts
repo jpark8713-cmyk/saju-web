@@ -1,26 +1,17 @@
 // 리포트를 읽는 사람: 만 13세 미만 사주는 부모가 아이를 관찰하고 돌볼 때 참고하는 리포트로 쓴다(사업자 결정 2026-10-22, D-044).
 // 무료 미리보기와 결제 후 리포트가 같은 기준을 써야 총평 템플릿 문장이 같아진다.
+import { fullAge, type YMD } from '../engine/age';
 import type { SajuChart } from '../engine/types';
+
+export { fullAge };
 
 /** 이 나이(만) 미만이면 아이 리포트 */
 export const CHILD_AGE_LIMIT = 13;
-
-interface YMD {
-  year: number;
-  month: number;
-  day: number;
-}
 
 /** 한국 시간 기준 날짜 */
 export function kstDateOf(d: Date): YMD {
   const k = new Date(d.getTime() + 9 * 3_600_000);
   return { year: k.getUTCFullYear(), month: k.getUTCMonth() + 1, day: k.getUTCDate() };
-}
-
-/** 만 나이: 생일이 지나지 않았으면 한 살 뺀다 */
-export function fullAge(birth: YMD, asOf: YMD): number {
-  const passed = asOf.month > birth.month || (asOf.month === birth.month && asOf.day >= birth.day);
-  return asOf.year - birth.year - (passed ? 0 : 1);
 }
 
 /** 기준 시각(주문 시각 등)에 만 13세 미만이면 true. 생일은 계산에 쓴 양력 날짜로 본다 */

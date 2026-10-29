@@ -66,7 +66,7 @@ export function buildChartView(chart: SajuChart): ChartView {
       element, ko: ELEMENT_KO[element], hanja: ELEMENT_HANJA[element], count: chart.elements.counts[element], ref: `elements.${element}` as ChartRef,
     })),
     elementTotal: chart.elements.total,
-    daewoon: chart.daewoon.map((d) => ({ index: d.index, label: pillarLabel(d.pillar), startLabel: daewoonStartLabel(d), ref: `daewoon[${d.index}]` as ChartRef })),
+    daewoon: chart.daewoon.map((d) => ({ index: d.index, label: pillarLabel(d.pillar), startLabel: daewoonStartLabel(d, chart.solarDate), ref: `daewoon[${d.index}]` as ChartRef })),
     seun: chart.seun.map((s, i) => ({ index: i, year: s.year, label: pillarLabel(s.pillar), ref: `seun[${i}]` as ChartRef })),
   };
 }

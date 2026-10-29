@@ -1,7 +1,7 @@
 // 대운 시작일: 출생 시각(한국 벽시계) + 대운수(년·개월·일·시). lunar-javascript getStartSolar()와 대조한다(D-022).
 import lunarJs from 'lunar-javascript';
 import { describe, expect, it } from 'vitest';
-import { addYearsMonthsDays, daewoonStartLabel } from '../../src/engine/daewoon';
+import { addYearsMonthsDays, daewoonStartAge, daewoonStartLabel } from '../../src/engine/daewoon';
 import { buildEvidence } from '../../src/engine/evidence';
 import { chartOf, solar } from './helpers';
 
@@ -52,17 +52,25 @@ describe('첫 대운 시작일이 lunar-javascript와 같다', () => {
 });
 
 describe('근거 문구의 대운 시작 표기', () => {
-  it('대운 근거와 방향 근거는 표준 표기 "K세(YYYY년 M월)" 하나만 쓴다', () => {
+  it('대운 근거와 방향 근거는 표준 표기 "K세(만 N세, YYYY년 M월)" 하나만 쓴다', () => {
     const c = chartOf(solar(1990, 5, 15, { hour: 14, minute: 30 }));
     const ev = buildEvidence(c);
     for (const d of c.daewoon) {
       const e = ev.find((x) => x.id === `daewoon[${d.index}]`)!;
-      expect(e.content).toContain(daewoonStartLabel(d));
+      expect(e.content).toContain(daewoonStartLabel(d, c.solarDate));
       expect(e.content).not.toMatch(/출생 후|개월/);
     }
     const dir = ev.find((x) => x.id === 'daewoon.direction')!;
-    expect(dir.content).toContain(daewoonStartLabel(c.daewoon[0]!));
+    expect(dir.content).toContain(daewoonStartLabel(c.daewoon[0]!, c.solarDate));
     expect(dir.content).not.toMatch(/출생 후|개월/);
+  });
+
+  it('만 나이는 대운이 시작되는 날까지 생일이 지났는지로 센다', () => {
+    const birth = { year: 1956, month: 11, day: 8 };
+    expect(daewoonStartLabel({ koreanAge: 71, startYear: 2026, startMonth: 7, startDay: 20 }, birth)).toBe('71세(만 69세, 2026년 7월)');
+    expect(daewoonStartAge({ startYear: 2026, startMonth: 11, startDay: 7 }, birth)).toBe(69);
+    expect(daewoonStartAge({ startYear: 2026, startMonth: 11, startDay: 8 }, birth)).toBe(70);
+    expect(daewoonStartAge({ startYear: 2026, startMonth: 12, startDay: 1 }, birth)).toBe(70);
   });
 
   it('세는 나이는 시작 연도 - 출생 연도 + 1', () => {

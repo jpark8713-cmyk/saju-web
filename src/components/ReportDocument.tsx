@@ -292,8 +292,11 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
         view.sections.map((sec) => (
           <section key={sec.id} id={`section-${sec.id}`} className="section" data-section={sec.id}>
             <SectionHead title={sec.title} />
-            {sec.groups.map((g, i) => (
-              <div key={i} className={g.cluster || g.flow ? 'period-group' : undefined} data-period-group={g.cluster || g.flow ? i : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {sec.groups.map((g, i) => {
+              // 10년 흐름은 큰 흐름 표시를 뺀 줄도 같은 행 스타일(쪽 나눔 방지·PDF 격자)을 쓴다(D-057)
+              const periodRow = !!(g.cluster || g.flow || sec.id === 'years');
+              return (
+              <div key={i} className={periodRow ? 'period-group' : undefined} data-period-group={periodRow ? i : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {/* 월별 흐름의 계절 묶음 머리(D-052): 묶음이 바뀔 때만 */}
                 {g.cluster && g.cluster !== sec.groups[i - 1]?.cluster && <p className="period-cluster" data-testid="period-cluster">{g.cluster}</p>}
                 {g.subtitle && <h3 className="h3">{g.subtitle}</h3>}
@@ -324,7 +327,8 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
                 )}
                 <Sentences list={g.sentences} ctx={ctx} />
               </div>
-            ))}
+              );
+            })}
             {sec.note && (
               <p className="hint period-note" data-testid="section-note">
                 {sec.note.text}

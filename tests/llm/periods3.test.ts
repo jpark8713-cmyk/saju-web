@@ -9,7 +9,7 @@ import { generateReport } from '../../src/llm/generate';
 import { decadeUserMessage } from '../../src/llm/prompt';
 import { SAMPLE_AS_OF, SAMPLE_INPUTS, SAMPLE_REFERENCE_YEAR } from '../../src/llm/samples';
 import type { ReportBody } from '../../src/llm/types';
-import { prepareRules, validateSentence } from '../../src/llm/validate';
+import { periodWatchHits, prepareRules, validateSentence } from '../../src/llm/validate';
 import {
   openerFrame, relationWordsMismatch, validateOpenerFrame, validatePeriodAngleCopy, validatePeriodNameStart, validatePeriodRelationAdvice, validatePhraseRepeat, validateWordCap,
 } from '../../src/llm/validate';
@@ -124,6 +124,19 @@ describe('칸 사이 반복(월별 ↔ 10년 ↔ 올해·내년): 다시 만들�
     const r = await gen(adult, t);
     expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'decade', 'monthly', 'topic:wealth']);
     expect(r.body.observed).toMatchObject({ besideOver: 1 });
+  });
+  it('월·연 칸의 과거 단정("예전에 익힌")·만든 장면("낯선 사람과도")은 다시 만들지 않고 문장 수만 남긴다(D-057)', async () => {
+    const ok = validResponder(adult.indices);
+    const t = new FakeTransport((req, n) => {
+      const r = ok(req, n) as { body: any };
+      if (req.label === 'monthly') r.body.periods[0].sentences[0].text = '예전에 익힌 솜씨를 차분히 꺼내 보는 달이에요.';
+      if (req.label === 'decade') r.body.periods[0].sentences[0].text = '낯선 사람과도 금세 어울리는 해예요.';
+      return r;
+    }, () => 0, 'raw');
+    const r = await gen(adult, t);
+    expect(t.requests.map((q) => q.label).sort()).toEqual(['base', 'decade', 'monthly', 'topic:wealth']);
+    expect(r.body.observed).toMatchObject({ periodWatch: 2 });
+    expect(periodWatchHits([{ path: 'a', text: '예전에  익힌 방식' }, { path: 'b', text: '낯선 사람과 만나요' }]).map((h) => h.path)).toEqual(['a']);
   });
   it('반복이 없으면 기록도 0', async () => {
     const r = await gen(adult, new FakeTransport(validResponder(adult.indices)));
@@ -336,8 +349,8 @@ describe('월·연 문장 마감(D-052 3단계, A~F)', () => {
     const p = buildPeriodEvidence(s.chart, SAMPLE_AS_OF, SAMPLE_REFERENCE_YEAR);
     const turn = p.years.find((y) => y.nextDaewoon)!;
     const ev = p.evidence.find((e) => e.id === `year[${turn.index}]`)!;
-    expect(ev.content).toMatch(/대운\(\d+세\(\d{4}년 \d{1,2}월\)부터\)으로 바뀜/u);
-    const label = /대운\((\d+세\(\d{4}년 \d{1,2}월\))부터\)으로 바뀜/u.exec(ev.content)![1]!;
+    expect(ev.content).toMatch(/대운\(\d+세\(만 \d+세, \d{4}년 \d{1,2}월\)부터\)으로 바뀜/u);
+    const label = /대운\((\d+세\(만 \d+세, \d{4}년 \d{1,2}월\))부터\)으로 바뀜/u.exec(ev.content)![1]!;
     const rules = prepareRules({ evidence: [...s.evidence, ...p.evidence], forbidden: [], maxChars: L.maxSentenceChars });
     expect(validateSentence({ text: `${label}부터 큰 흐름이 바뀌니 익힐 것을 하나 골라 보세요.`, evidenceIds: [`year[${turn.index}]`] }, 'p', rules).map((x) => x.code)).not.toContain('numberNotInEvidence');
   });

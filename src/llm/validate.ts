@@ -5,7 +5,7 @@
 // - 전문 용어(일간·천간·십신 이름 등)가 남으면 다시 생성한다(D-042)
 import type { ForbiddenRule } from '../config/topics';
 import type { Evidence } from '../engine/types';
-import { ADVICE_ENDING_RE, MONTH_SOCIAL_RE, RELATION_PERSON_RE, findForbidden } from './forbidden';
+import { ADVICE_ENDING_RE, MONTH_SOCIAL_RE, PERIOD_WATCH_PHRASES, RELATION_PERSON_RE, findForbidden } from './forbidden';
 import { TEN_GOD_GROUPS } from '../engine/constants';
 
 /** 근거 목록의 묶음 이름(쉬운 말 표기) */
@@ -545,6 +545,14 @@ export function validateWordCap(sentences: readonly { path: string; text: string
   }));
 }
 
+/** 월·연 칸 기록용 표현(PERIOD_WATCH_PHRASES)이 들어간 문장(D-057, 기록만). 띄어쓰기 차이는 무시한다 */
+export function periodWatchHits(sentences: readonly { path: string; text: string }[]): { path: string; reason: string }[] {
+  const squashed = (s: string) => s.replace(/\s+/gu, '');
+  return sentences.flatMap((s) =>
+    PERIOD_WATCH_PHRASES.filter((w) => squashed(s.text).includes(squashed(w.pattern))).map((w) => ({ path: s.path, reason: w.reason })),
+  );
+}
+
 /** 묶는 말마다 cap을 넘게 만든 sentences 쪽 문장 위치(넘친 말만) */
 export function wordCapOverflow(
   sentences: readonly { path: string; text: string }[],
@@ -640,7 +648,8 @@ export function validateRepetition(
 }
 
 /** 대운 시작 표준 표기 "K세(YYYY년 M월)". 앞이 숫자가 아니어야 한다("18세(…)" 안의 "8세(…)"를 따로 보지 않음) */
-const DAEWOON_LABEL_RE = /(?<!\d)\d{1,3}\s?세\s?\(\s?\d{4}\s?년\s?\d{1,2}\s?월\s?\)/gu;
+// 대운 시작 표기 "71세(만 69세, 2026년 7월)". 예전 표기 "71세(2026년 7월)"도 잡아 두어, 근거와 다르게 쓰면 다른 표기로 걸린다
+const DAEWOON_LABEL_RE = /(?<!\d)\d{1,3}\s?세\s?\(\s?(?:만\s?\d{1,3}\s?세\s?,\s?)?\d{4}\s?년\s?\d{1,2}\s?월\s?\)/gu;
 const KOREAN_AGE = '(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|스물|서른|마흔|쉰|예순|일흔|여든|아흔)(?:\\s?(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉))?\\s?살';
 /**
  * 숫자로 쓴 사실: 연·월(2026년 6월, 2026.6), 연도(2026년, 98년부터), 월(6월), 나이(28세, 28살, 스물여덟 살), n년 n개월.
@@ -702,7 +711,7 @@ export function validateNumbers(text: string, path: string, cited: readonly Evid
       .filter((e) => e.kind === 'daewoon' || e.kind === 'daewoonDirection' || e.kind === 'year')
       .flatMap((e) => [...normalizeParens(e.content).matchAll(DAEWOON_LABEL_RE)].map((m) => squash(m[0]))),
   );
-  const example = [...citedLabels][0] ?? 'K세(YYYY년 M월)';
+  const example = [...citedLabels][0] ?? 'K세(만 N세, YYYY년 M월)';
 
   const labelsInText = [...normalized.matchAll(DAEWOON_LABEL_RE)].map((m) => squash(m[0]));
   const wrongLabels = labelsInText.filter((l) => !citedLabels.has(l));

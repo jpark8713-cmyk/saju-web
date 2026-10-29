@@ -8,19 +8,23 @@ const basisOf = (y: number, m: number, d: number, time: { hour: number; minute: 
   calcBasis(chartOf(solar(y, m, d, time, { birthplaceLongitude: lon }), settings));
 
 describe('시간 보정 설명', () => {
-  it('서울: 차이(32분 5초)와 예시(23:30 → 22:57:55)가 맞물리고, 계산에 쓴 분(22:57)을 밝힌다', () => {
+  it('서울: 차이(32분 5초)와 예시(23:30 → 22:57:55)가 맞물린다. 분 미만 버림 설명은 싣지 않는다', () => {
     const b = basisOf(1999, 12, 31, { hour: 23, minute: 30 });
-    expect(b.timeCorrection).toBe('출생지 경도(동경 126.98°)로 표준시보다 32분 5초 늦은 그 지역 시각을 써요. 입력 23:30 → 22:57:55(초는 버리고 22:57 기준으로 계산)');
+    expect(b.timeCorrection).toBe('출생지 경도(동경 126.98°)로 표준시보다 32분 5초 늦은 그 지역 시각을 써요. 태어난 시각 23:30 → 그 지역 시각 22:57:55');
+  });
+
+  it('초가 0이면 "22:58"처럼 분까지만 쓴다(지역 모름 = 동경 127°)', () => {
+    expect(basisOf(1999, 12, 31, { hour: 23, minute: 30 }, 127).timeCorrection).toBe('출생지 경도(동경 127°)로 표준시보다 32분 늦은 그 지역 시각을 써요. 태어난 시각 23:30 → 그 지역 시각 22:58');
   });
 
   it('서머타임 출생은 1시간을 뺀 단계를 보여 준다', () => {
     const b = basisOf(1987, 7, 15, { hour: 10, minute: 20 });
-    expect(b.timeCorrection).toContain('입력 10:20 → 서머타임 1시간을 빼 09:20 → 08:47:55(초는 버리고 08:47 기준으로 계산)');
+    expect(b.timeCorrection).toContain('태어난 시각 10:20 → 서머타임 1시간을 빼 09:20 → 그 지역 시각 08:47:55');
   });
 
   it('UTC+8:30 시대는 당시 표준시 기준 차이(2분 5초)로 쓴다. 동쪽 지역은 "빠른"', () => {
     expect(basisOf(1958, 3, 1, { hour: 12, minute: 0 }).timeCorrection).toContain('표준시보다 2분 5초 늦은');
-    expect(basisOf(1956, 11, 20, { hour: 12, minute: 0 }, 129.05).timeCorrection).toContain('표준시보다 6분 12초 빠른 그 지역 시각을 써요. 입력 12:00 → 12:06:12');
+    expect(basisOf(1956, 11, 20, { hour: 12, minute: 0 }, 129.05).timeCorrection).toContain('표준시보다 6분 12초 빠른 그 지역 시각을 써요. 태어난 시각 12:00 → 그 지역 시각 12:06:12');
   });
 
   it('시간 모름이면 예시 없이 "시주 제외"를 붙인다', () => {
@@ -63,6 +67,19 @@ describe('보정으로 기둥이 달라질 때 한 줄', () => {
     expect(basisOf(2001, 3, 21, { hour: 7, minute: 25 }, 128.88).clockDiff).toBeNull();
     expect(basisOf(2024, 2, 4, null).clockDiff).toBeNull();
     expect(basisOf(1999, 12, 31, { hour: 23, minute: 30 }, 126.98, { longitudeCorrection: false }).clockDiff).toBeNull();
+  });
+});
+
+describe('입춘일·시간 모름 안내(D-057)', () => {
+  it('정오로 계산한 이 리포트가 절입 전·뒤 어느 쪽 기준인지 한 줄을 더한다', () => {
+    const n = basisOf(2024, 2, 4, null).notices.find((x) => x.code === 'unknownTimeOnJieDay')!;
+    expect(n.details).toHaveLength(3);
+    expect(n.details[2]).toBe('이 리포트의 대운·10년 흐름 등 나머지 풀이도 입춘 전 출생(정오로 계산) 기준이에요.');
+  });
+  it('정오가 절입 뒤인 날은 "뒤"', () => {
+    // 1990-02-04 입춘은 11:14(한국 시각)라 정오는 입춘 뒤
+    const n = basisOf(1990, 2, 4, null).notices.find((x) => x.code === 'unknownTimeOnJieDay')!;
+    expect(n.details[2]).toBe('이 리포트의 대운·10년 흐름 등 나머지 풀이도 입춘 뒤 출생(정오로 계산) 기준이에요.');
   });
 });
 

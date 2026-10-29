@@ -80,6 +80,8 @@ export interface ReportBody {
     periodPhraseRepeat?: number;
     /** D-052 3단계(기록만): 리포트 전체 "곁에서"가 3번을 넘게 한 문장 수 */
     besideOver?: number;
+    /** D-057(기록만): 월·연 칸에서 과거 단정·만든 장면 표현(PERIOD_WATCH_PHRASES)을 쓴 문장 수 */
+    periodWatch?: number;
   };
 }
 

@@ -185,12 +185,12 @@ function luckTenGods(chart: SajuChart, pillar: Pillar): string {
 function luckText(chart: SajuChart, key: string, v: Voice): string {
   if (key === 'daewoon.direction') {
     const first = chart.daewoon[0];
-    return first ? `큰 흐름은 10년마다 바뀌어요. 첫 큰 흐름은 ${daewoonStartLabel(first)}부터 시작돼요.` : '큰 흐름은 10년마다 바뀌어요.';
+    return first ? `큰 흐름은 10년마다 바뀌어요. 첫 큰 흐름은 ${daewoonStartLabel(first, chart.solarDate)}부터 시작돼요.` : '큰 흐름은 10년마다 바뀌어요.';
   }
   const dw = /^daewoon\[(\d+)\]$/.exec(key);
   if (dw) {
     const d = chart.daewoon[Number(dw[1])];
-    return d ? `${daewoonStartLabel(d)}부터 10년은 ${pillarLabel(d.pillar)}의 큰 흐름이에요. ${luckGlyphText(chart, d.pillar, v)}` : '';
+    return d ? `${daewoonStartLabel(d, chart.solarDate)}부터 10년은 ${pillarLabel(d.pillar)}의 큰 흐름이에요. ${luckGlyphText(chart, d.pillar, v)}` : '';
   }
   const se = /^seun\[(\d+)\]$/.exec(key);
   const y = se ? chart.seun[Number(se[1])] : undefined;

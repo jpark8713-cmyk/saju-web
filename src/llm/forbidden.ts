@@ -128,6 +128,15 @@ export const PERIOD_TIME_FORBIDDEN: ForbiddenRule = {
   reason: '월별·10년 흐름: 근거에 없는 시간 서술(처음·비로소·새로 들어오는·다시 돌아오는 등, 다른 달·해와 견주는 말)',
 };
 
+/**
+ * 월·연 칸에서 기록만 하는 표현(D-057, 사업자 결정: 다시 쓰게 하지 않는다). 최종 샘플(run21)에서 찾은 것:
+ * 근거에 없는 과거를 단정("예전에 익힌"), 근거에 없는 장면을 만듦("낯선 사람과도"). 출시 후 실제 주문에서 빈도를 보고 하드로 올릴지 정한다
+ */
+export const PERIOD_WATCH_PHRASES: readonly { pattern: string; reason: string }[] = Object.freeze([
+  { pattern: '예전에 익힌', reason: '근거에 없는 과거 단정' },
+  { pattern: '낯선 사람과도', reason: '근거에 없는 장면' },
+]);
+
 /** 아이 리포트 전체(그 나이대에 맞춰 쓰는 13세 이후 대운 칸 포함, D-045): 읽는 사람은 부모다. 아이를 "나"로 부르지 않는다 */
 export const CHILD_VOICE_FORBIDDEN: readonly ForbiddenRule[] = Object.freeze([
   // D-050: 개수 기준의 "나를 뺀 N글자"는 따로 알려 준다(effort low 실험에서 거의 모든 시도가 이 말로 걸렸다)

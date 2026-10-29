@@ -37,8 +37,11 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   const sections = await page.locator('[data-testid="report-document"] [data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
   expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
   await expect(page.getByTestId('basis-counting')).toContainText('지장간은 세지 않습니다');
-  // D-056 계산 기준: 지역 모름(동경 127°) 14:30 → 보정 차이와 예시가 맞물리고, 해당 없는 표준시·기둥 차이 줄은 없다
-  await expect(page.getByTestId('basis-time')).toContainText('표준시보다 32분 늦은 그 지역 시각을 써요. 입력 14:30 → 13:58:00');
+  // D-056·D-057 계산 기준: 지역 모름(동경 127°) 14:30 → 초가 0이라 분까지만, 해당 없는 표준시·기둥 차이 줄은 없다
+  await expect(page.getByTestId('basis-time')).toHaveText('시간 보정: 출생지 경도(동경 127°)로 표준시보다 32분 늦은 그 지역 시각을 써요. 태어난 시각 14:30 → 그 지역 시각 13:58');
+  // D-057: 대운 표와 대운 제목은 세는 나이에 만 나이를 함께 쓴다
+  await expect(page.locator('[data-section="daewoon"] h3').first()).toHaveText(/^\d+번째 대운 · \d+세\(만 \d+세, \d{4}년 \d{1,2}월\)부터$/u);
+  await expect(page.getByTestId('luck-table')).toContainText(/\d+세\(만 \d+세, \d{4}년 \d{1,2}월\)/u);
   await expect(page.getByTestId('basis-jasi')).toContainText('시주는 다음 날 기준 자시');
   await expect(page.getByTestId('basis-calendar')).toContainText('경도 보정 없이 시계 시각');
   await expect(page.getByTestId('basis-timezone')).toHaveCount(0);
@@ -126,7 +129,8 @@ test('경도 보정으로 시주가 달라지면 계산 기준에 한 줄, 서�
   await page.getByTestId('region-district').selectOption({ label: '종로구' });
   await page.getByTestId('input-submit').click();
   await expect(page.getByTestId('preview-document')).toBeVisible();
-  await expect(page.getByTestId('basis-time')).toContainText('표준시보다 32분 5초 늦은 그 지역 시각을 써요. 입력 23:30 → 22:57:55(초는 버리고 22:57 기준으로 계산)');
+  // 실제 서울 선택 흐름(종로구 126.98°): 초가 있으면 초까지, 버림 설명은 없다(D-057)
+  await expect(page.getByTestId('basis-time')).toHaveText('시간 보정: 출생지 경도(동경 126.98°)로 표준시보다 32분 5초 늦은 그 지역 시각을 써요. 태어난 시각 23:30 → 그 지역 시각 22:57:55');
   await expect(page.getByTestId('basis-clock')).toHaveText('참고: 이 리포트는 경도 보정 시각으로 기둥을 정했어요. 보정 없이 시계 시각 그대로(23:30) 보는 만세력에서는 시주가 임자(壬子)로 다르게 나올 수 있어요');
   // 눈에 띄는 안내 상자가 아니라 계산 기준 섹션 안의 한 줄
   await expect(page.locator('[data-section="disclaimer"]').getByTestId('basis-clock')).toHaveCount(1);
@@ -138,6 +142,13 @@ test('경도 보정으로 시주가 달라지면 계산 기준에 한 줄, 서�
   await page.getByTestId('input-submit').click();
   await expect(page.getByTestId('preview-document')).toBeVisible();
   await expect(page.getByTestId('basis-timezone')).toHaveText('표준시: 서머타임 기간이라 1시간을 빼서 계산했어요');
+});
+
+test('입춘일·시간 모름 안내 상자에 나머지 풀이의 기준 한 줄(D-057)', async ({ page }) => {
+  await toPreview(page, { year: '2024', month: '2', day: '4', timeUnknown: true });
+  const notice = page.locator('[data-notice="unknownTimeOnJieDay"]');
+  await expect(notice).toContainText('입춘 절입(2024-02-04 17:27) 전 출생');
+  await expect(notice.locator('li').last()).toHaveText('이 리포트의 대운·10년 흐름 등 나머지 풀이도 입춘 전 출생(정오로 계산) 기준이에요.');
 });
 
 test('음력 윤달 + 시간 모름으로 미리보기까지, 없는 윤달은 서버 검증 문구로 돌아온다', async ({ page }) => {

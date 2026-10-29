@@ -174,7 +174,7 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
     kind: 'daewoonDirection',
     // 시작 시점은 표준 표기(K세(YYYY년 M월)) 하나만 둔다. 다른 표기(출생 후 n년 n개월 등)를 함께 보이면 문장마다 표기가 갈린다(D-022)
     content: chart.daewoon.length
-      ? `대운은 ${s.forward ? '순행' : '역행'}하며 첫 대운은 ${daewoonStartLabel(chart.daewoon[0]!)}부터 시작됨(${s.forward ? '다음' : '이전'} 절입 ${s.jieName} 기준, 나이는 세는 나이)`
+      ? `대운은 ${s.forward ? '순행' : '역행'}하며 첫 대운은 ${daewoonStartLabel(chart.daewoon[0]!, chart.solarDate)}부터 시작됨(${s.forward ? '다음' : '이전'} 절입 ${s.jieName} 기준, 앞의 나이는 세는 나이)`
       : `대운은 ${s.forward ? '순행' : '역행'}함`,
     sourceFields: ['daewoonStart'],
     chartRefs: chart.daewoon.length ? ['daewoon[0]'] : [],
@@ -183,7 +183,7 @@ function daewoonEvidence(chart: SajuChart): Evidence[] {
   const entries = chart.daewoon.map((d): Evidence => ({
     id: `daewoon[${d.index}]`,
     kind: 'daewoon',
-    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${daewoonStartLabel(d)}부터 10년(나이는 세는 나이), ${luckElements(d.pillar)}`,
+    content: `${d.index + 1}번째 대운 ${pillarLabel(d.pillar)}: ${daewoonStartLabel(d, chart.solarDate)}부터 10년(앞의 나이는 세는 나이), ${luckElements(d.pillar)}`,
     sourceFields: [`daewoon[${d.index}]`],
     chartRefs: [`daewoon[${d.index}]`],
     terms: [pillarKo(d.pillar), pillarHanja(d.pillar), STEMS_KO[d.pillar.stem]!, BRANCHES_KO[d.pillar.branch]!],
@@ -267,8 +267,11 @@ export function monthEvidence(chart: SajuChart, months: readonly MonthPeriod[]):
 }
 
 /** 10년 흐름의 큰 흐름 표시: "경신(庚申)", 해 중간에 바뀌면 "기미(己未)→경신(庚申)(11월 전환)", 첫 대운 전이면 "첫 큰 흐름 전" */
+/** 첫 대운이 시작되기 전 해의 큰 흐름 표기 */
+export const PRE_DAEWOON_LABEL = '첫 큰 흐름 전';
+
 export function yearDaewoonLabel(y: YearPeriod): string {
-  const now = y.daewoon ? pillarLabel(y.daewoon.pillar) : '첫 큰 흐름 전';
+  const now = y.daewoon ? pillarLabel(y.daewoon.pillar) : PRE_DAEWOON_LABEL;
   return y.nextDaewoon ? `${now}→${pillarLabel(y.nextDaewoon.pillar)}(${y.nextDaewoon.startMonth}월 전환)` : now;
 }
 
@@ -279,9 +282,9 @@ export function yearEvidence(chart: SajuChart, years: readonly YearPeriod[]): Ev
   return years.map((y): Evidence => {
     const meaning = luckMeaning(chart, y.pillar);
     const main = y.relations[0];
-    const flow = y.daewoon ? `${pillarLabel(y.daewoon.pillar)} 대운(${daewoonStartLabel(y.daewoon)}부터)` : '첫 대운 전';
+    const flow = y.daewoon ? `${pillarLabel(y.daewoon.pillar)} 대운(${daewoonStartLabel(y.daewoon, chart.solarDate)}부터)` : '첫 대운 전';
     const turn = y.nextDaewoon
-      ? `, ${y.nextDaewoon.startYear}년 ${y.nextDaewoon.startMonth}월에 ${pillarLabel(y.nextDaewoon.pillar)} 대운(${daewoonStartLabel(y.nextDaewoon)}부터)으로 바뀜(${yearDaewoonLabel(y)})`
+      ? `, ${y.nextDaewoon.startYear}년 ${y.nextDaewoon.startMonth}월에 ${pillarLabel(y.nextDaewoon.pillar)} 대운(${daewoonStartLabel(y.nextDaewoon, chart.solarDate)}부터)으로 바뀜(${yearDaewoonLabel(y)})`
       : '';
     const dws = [y.daewoon, y.nextDaewoon].filter((d): d is DaewoonEntry => !!d);
     return {

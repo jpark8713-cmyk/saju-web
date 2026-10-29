@@ -84,7 +84,7 @@ function daewoonFacts(chart: SajuChart, index: number): ReportSentence[] {
   const id = `daewoon[${index}]`;
   const name = `${pillarLabel(d.pillar)}의 큰 흐름`;
   return [
-    s(`${daewoonStartLabel(d)}부터 10년은 ${name}이에요.`, id),
+    s(`${daewoonStartLabel(d, chart.solarDate)}부터 10년은 ${name}이에요.`, id),
     s(`${name}에서 윗글자 ${josa(stemLabel(d.pillar.stem), '은/는')} ${ELEMENT_PLAIN[STEM_ELEMENTS[d.pillar.stem]!]}의 기운이에요.`, id),
     s(`${name}에서 아랫글자 ${josa(branchLabel(d.pillar.branch), '은/는')} ${ELEMENT_PLAIN[BRANCH_ELEMENTS[d.pillar.branch]!]}의 기운이에요.`, id),
   ];

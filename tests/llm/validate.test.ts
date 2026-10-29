@@ -1,6 +1,7 @@
 // 간지·십신 표기 찾기, 문장 검증, 금지 표현
 import { describe, expect, it } from 'vitest';
 import { buildChart } from '../../src/engine/chart';
+import { daewoonStartAge, daewoonStartLabel } from '../../src/engine/daewoon';
 import { BRANCHES_KO, STEMS_KO, TEN_GOD_GROUPS, TEN_GOD_KO } from '../../src/engine/constants';
 import { buildEvidence } from '../../src/engine/evidence';
 import { COMMON_FORBIDDEN } from '../../src/llm/forbidden';
@@ -202,11 +203,17 @@ describe('숫자 사실과 대운 시작 표기 (D-022)', () => {
   const evidence = buildEvidence(chart);
   const byId = new Map(evidence.map((e) => [e.id, e]));
   const d1 = chart.daewoon[1]!;
-  const label = `${d1.koreanAge}세(${d1.startYear}년 ${d1.startMonth}월)`;
+  const label = daewoonStartLabel(d1, chart.solarDate);
   const cite = (...ids: string[]) => ids.map((id) => byId.get(id)!);
 
   it('대운 시작을 표준 표기 그대로 쓰면 통과', () => {
+    expect(label).toMatch(/^\d+세\(만 \d+세, \d{4}년 \d{1,2}월\)$/u);
     expect(validateNumbers(`${label}부터 새 흐름이 열려요.`, 'p', cite('daewoon[1]'))).toEqual([]);
+  });
+
+  it('만 나이를 뺀 예전 표기("K세(YYYY년 M월)")는 근거와 다른 표기로 거부', () => {
+    const old = `${d1.koreanAge}세(${d1.startYear}년 ${d1.startMonth}월)`;
+    expect(validateNumbers(`${old}부터 새 흐름이 열려요.`, 'p', cite('daewoon[1]')).map((v) => v.code)).toContain('numberNotInEvidence');
   });
 
   it.each([
@@ -218,7 +225,7 @@ describe('숫자 사실과 대운 시작 표기 (D-022)', () => {
   });
 
   it('인용한 근거에 없는 연·월·나이는 거부', () => {
-    const wrong = `${d1.koreanAge + 1}세(${d1.startYear + 1}년 ${d1.startMonth}월)부터 흐름이 바뀌어요.`;
+    const wrong = `${d1.koreanAge + 1}세(만 ${daewoonStartAge(d1, chart.solarDate) + 1}세, ${d1.startYear + 1}년 ${d1.startMonth}월)부터 흐름이 바뀌어요.`;
     const codes = validateNumbers(wrong, 'p', cite('daewoon[1]')).map((v) => v.code);
     expect(codes).toContain('numberNotInEvidence');
   });
@@ -241,8 +248,8 @@ describe('숫자 규칙: 리뷰에서 찾은 우회·오탐·누락 (D-022)', ()
   const ev = new Map(buildEvidence(chart).map((e) => [e.id, e]));
   const cite = (...ids: string[]) => ids.map((id) => ev.get(id)!);
   const [d0, d1] = [chart.daewoon[0]!, chart.daewoon[1]!];
-  const L0 = `${d0.koreanAge}세(${d0.startYear}년 ${d0.startMonth}월)`;
-  const L1 = `${d1.koreanAge}세(${d1.startYear}년 ${d1.startMonth}월)`;
+  const L0 = daewoonStartLabel(d0, chart.solarDate);
+  const L1 = daewoonStartLabel(d1, chart.solarDate);
   const codes = (text: string, ...ids: string[]) => validateNumbers(text, 'p', cite(...ids)).map((v) => v.code);
 
   it('표준 표기 옆에 따로 쓴 연도는 거부 (우회 1)', () => {
@@ -250,7 +257,7 @@ describe('숫자 규칙: 리뷰에서 찾은 우회·오탐·누락 (D-022)', ()
   });
 
   it('두 근거를 섞은 가짜 표기는 거부 (우회 2)', () => {
-    const fake = `${d1.koreanAge}세(${d0.startYear}년 ${d0.startMonth}월)`;
+    const fake = `${d1.koreanAge}세(만 ${daewoonStartAge(d1, chart.solarDate)}세, ${d0.startYear}년 ${d0.startMonth}월)`;
     expect(codes(`${fake}부터 두 번째 대운이에요.`, 'daewoon[0]', 'daewoon[1]')).toContain('numberNotInEvidence');
   });
 

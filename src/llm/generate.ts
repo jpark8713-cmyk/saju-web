@@ -25,6 +25,7 @@ import {
   validateDoubleBase, validateOpenerRepeat, validatePeriodLead, validatePeriodNotes, validateRepetition, validateSection, validateStandalone, validateVacuous,
   validateYearly, type PeriodFacts, type PreparedRules, type YearFacts,
   repeatedPhrases, validateOpenerFrame, validatePeriodNameStart, validatePeriodRelationAdvice, validatePeriodAngleCopy, validatePhraseRepeat, validateWordCap, wordCapOverflow,
+  periodWatchHits,
 } from './validate';
 import {
   fallbackBase, fallbackChildPeriods, fallbackMonths, fallbackTopic, fallbackYears, patchBase, patchChildPeriods, patchPeriods, patchTopic,
@@ -784,6 +785,7 @@ export async function generateReport(args: GenerateArgs): Promise<GenerateResult
       observed: observe(
         [...baseSentences(base.value), ...topics.flatMap((t, i) => sentencesOf(`topics.${t.id}`, topicSentences[i]!)), ...periodTexts],
         [...sentencesOf('yearly.thisYear', base.value.yearly.thisYear), ...sentencesOf('yearly.nextYear', base.value.yearly.nextYear), ...periodTexts],
+        periodTexts,
       ),
     },
     attempts: ctx.log,
@@ -800,12 +802,15 @@ function observe(
   sentences: readonly { path: string; text: string }[],
   /** 월·연·올해·내년 문장(D-052 3단계: 칸 사이 반복은 다시 쓰게 하지 않고 기록만, 사업자 결정) */
   periodish: readonly { path: string; text: string }[],
+  /** 월·연 칸 문장만(D-057: 과거 단정·만든 장면 표현 기록) */
+  periodOnly: readonly { path: string; text: string }[],
 ): NonNullable<ReportBody['observed']> {
   return {
     angleCopy: validateAngleCopy(sentences).length,
     thinRelation: validateVacuous(sentences).length,
     periodPhraseRepeat: repeatedPhrases(periodish).length,
     besideOver: wordCapOverflow(sentences).reduce((n, c) => n + c.paths.length, 0),
+    periodWatch: new Set(periodWatchHits(periodOnly).map((h) => h.path)).size,
   };
 }
 

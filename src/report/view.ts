@@ -7,7 +7,7 @@ import { BRANCHES_HANJA, BRANCHES_KO, PART_PLAIN, POSITION_PLAIN, STEMS_HANJA, S
 import { tenGodOfBranch, tenGodOfStem } from '../engine/tenGods';
 import { josa } from './evidenceTerms';
 import { daewoonStartLabel } from '../engine/daewoon';
-import { buildPeriodEvidence, yearDaewoonLabel } from '../engine/evidence';
+import { PRE_DAEWOON_LABEL, buildPeriodEvidence, yearDaewoonLabel } from '../engine/evidence';
 import { rankRelations, type MonthPeriod, type SeasonPeriod, type YearPeriod } from '../engine/periods';
 import { luckRelations, type LuckRelation } from '../engine/relations';
 import type { PillarPosition } from '../engine/types';
@@ -206,7 +206,7 @@ export function buildReportView(args: {
 }): ReportView {
   const daewoonTitle = (index: number) => {
     const d = args.chart.daewoon[index];
-    return d ? `${index + 1}번째 대운 · ${daewoonStartLabel(d)}부터` : `${index + 1}번째 대운`;
+    return d ? `${index + 1}번째 대운 · ${daewoonStartLabel(d, args.chart.solarDate)}부터` : `${index + 1}번째 대운`;
   };
   const year = args.chart.seun[0]?.year;
   const topics = TOPICS.filter((t) => args.topicIds.includes(t.id) && args.body.topics[t.id]);
@@ -336,7 +336,18 @@ function periodSections(
       return [{ ...head, sentences: [], fact: { text: periodFactLine(chart, y.pillar, y.relations), link: { href: '#section-yearly', label: `위 ${SECTION_TITLES.yearly} 칸 참고` } } }];
     }),
   };
-  return [top, years];
+  return [top, { ...years, groups: dropRepeatedPreFlow(years.groups) }];
+}
+
+/** "첫 큰 흐름 전"이 해마다 반복되지 않게, 바로 위 줄도 같은 표기면 그 줄의 큰 흐름 표시를 뺀다(D-057, 주로 아이) */
+function dropRepeatedPreFlow(groups: readonly SectionGroup[]): SectionGroup[] {
+  return groups.map((g, i) => {
+    const prev = groups[i - 1];
+    const repeated = g.flow && !g.flow.turning && g.flow.label === PRE_DAEWOON_LABEL && prev?.flow?.label === PRE_DAEWOON_LABEL;
+    if (!repeated) return g;
+    const { flow: _flow, ...rest } = g;
+    return rest;
+  });
 }
 
 export function buildPreviewView(args: {

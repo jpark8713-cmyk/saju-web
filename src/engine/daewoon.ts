@@ -1,6 +1,7 @@
 // 대운: 양년생 남자·음년생 여자는 순행(다음 절입까지), 그 외는 역행(이전 절입부터).
 // 대운수는 3일=1년, 1일=4개월, 1시간=5일로 환산해 년·개월까지 쓴다(나머지는 버림).
 // 출생~절입 시간의 초 단위는 설정 daewoonRounding(기본 버림)으로 분에 맞춘다(Docs/decisions.md D-005).
+import { fullAge } from './age';
 import { cycleIndex, pillarFromCycle, stemYinYang } from './constants';
 import { nextJie, prevJie } from './solarTerms';
 import type { CalcSettings, DaewoonEntry, DaewoonStart, Gender, Pillar, SeunEntry } from './types';
@@ -95,8 +96,19 @@ export function computeDaewoon(monthPillar: Pillar, start: DaewoonStart, birth: 
 }
 
 /** 대운 시작 시점의 표준 표기. 근거 문구와 풀이 문장에 이 표기만 쓴다(D-022) */
-export function daewoonStartLabel(d: Pick<DaewoonEntry, 'koreanAge' | 'startYear' | 'startMonth'>): string {
-  return `${d.koreanAge}세(${d.startYear}년 ${d.startMonth}월)`;
+export function daewoonStartLabel(
+  d: Pick<DaewoonEntry, 'koreanAge' | 'startYear' | 'startMonth' | 'startDay'>,
+  birth: { year: number; month: number; day: number },
+): string {
+  return `${d.koreanAge}세(만 ${daewoonStartAge(d, birth)}세, ${d.startYear}년 ${d.startMonth}월)`;
+}
+
+/** 대운이 시작되는 날의 만 나이(아이 리포트 판정과 같은 fullAge). 저장된 예전 차트에도 쓰도록 엔트리에 저장하지 않고 계산한다 */
+export function daewoonStartAge(
+  d: Pick<DaewoonEntry, 'startYear' | 'startMonth' | 'startDay'>,
+  birth: { year: number; month: number; day: number },
+): number {
+  return fullAge(birth, { year: d.startYear, month: d.startMonth, day: d.startDay });
 }
 
 /** 세운: 해당 연도(입춘 이후 기준)의 년주 */

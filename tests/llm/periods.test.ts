@@ -245,6 +245,13 @@ describe('화면 데이터', () => {
     expect(view.sections.map((s) => s.id).slice(-2)).toEqual(['seasons', 'years']);
     expect(view.sections.find((s) => s.id === 'seasons')!.groups).toHaveLength(4);
     expect(view.sections.find((s) => s.id === 'yearly')!.note!.text).toContain('계절마다의 흐름은 아래 계절별 흐름');
+    // D-057: "첫 큰 흐름 전"은 첫 줄에만, 첫 대운으로 바뀌는 해는 전환 표시를 그대로
+    const flows = view.sections.find((s) => s.id === 'years')!.groups.map((g) => g.flow?.label ?? null);
+    expect(flows[0]).toBe('첫 큰 흐름 전');
+    expect(flows.filter((f) => f === '첫 큰 흐름 전')).toHaveLength(1);
+    expect(flows.find((f) => f?.startsWith('첫 큰 흐름 전→'))).toMatch(/^첫 큰 흐름 전→갑자\(甲子\)\(11월 전환\)$/u);
+    // D-057: 대운 제목은 세는 나이에 만 나이를 함께 쓴다(아이 2024-02-04생, 첫 대운 2033년 11월)
+    expect(view.sections.find((s) => s.id === 'daewoon')!.groups[0]!.subtitle).toMatch(/^\d+번째 대운 · 10세\(만 9세, 2033년 11월\)부터$/u);
   });
   it('월별·10년 흐름이 없는 예전 리포트는 그대로 보인다', async () => {
     const r = await gen(adult, new FakeTransport(validResponder(adult.indices)));

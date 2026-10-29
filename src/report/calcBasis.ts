@@ -30,7 +30,7 @@ function euro(word: string): string {
   return word + (final === 0 || final === 8 ? '로' : '으로');
 }
 
-function noticeDetails(n: SajuChart['notices'][number]): string[] {
+function noticeDetails(n: SajuChart['notices'][number], chart: SajuChart): string[] {
   if (n.minute) {
     const h = n.minute.hour;
     return n.minute.segments.map((s) => {
@@ -40,9 +40,13 @@ function noticeDetails(n: SajuChart['notices'][number]): string[] {
   }
   if (n.jie) {
     const j = n.jie;
+    // 정오로 계산한 이 리포트가 절입 전·뒤 어느 쪽인지(월주로 판정). 대운·10년 흐름 등 나머지 풀이도 그쪽 기준이다(D-057)
+    const m = chart.pillars.month;
+    const side = m.stem === j.ifBefore.month.stem && m.branch === j.ifBefore.month.branch ? '전' : '뒤';
     return [
       `${j.name} 절입(${j.localTime}) 전 출생: 월주 ${pillarLabel(j.ifBefore.month)} · 년주 ${pillarLabel(j.ifBefore.year)}`,
       `${j.name} 절입 뒤 출생: 월주 ${pillarLabel(j.ifAfter.month)} · 년주 ${pillarLabel(j.ifAfter.year)}`,
+      `이 리포트의 대운·10년 흐름 등 나머지 풀이도 ${j.name} ${side} 출생(정오로 계산) 기준이에요.`,
     ];
   }
   return [];
@@ -60,14 +64,17 @@ function durationText(totalSec: number): string {
   return parts.length ? parts.join(' ') : '0초';
 }
 
-function hms(ms: number): string {
+/** 초가 0이면 "22:58", 아니면 "22:57:55" */
+function clockText(ms: number): string {
   const t = civilFromMs(ms);
-  return `${hhmm(t.hour, t.minute)}:${pad(new Date(ms).getUTCSeconds())}`;
+  const sec = new Date(ms).getUTCSeconds();
+  return sec ? `${hhmm(t.hour, t.minute)}:${pad(sec)}` : hhmm(t.hour, t.minute);
 }
 
 /**
  * 경도 보정 설명. 표준시와의 차이는 보정 후 시각을 초까지 내린 값에서 거꾸로 구해,
  * "32분 5초"와 예시 "23:30 → 22:57:55"가 어긋나 보이지 않게 한다(실제 차이 32분 4.8초).
+ * 엔진은 분 미만을 버리지만 시·날의 경계는 모두 정각(분 단위)이라 버림이 기둥을 바꾸지 않으므로, 그 설명은 싣지 않는다(D-057).
  */
 function timeCorrectionText(chart: SajuChart): string {
   const s = chart.settings;
@@ -83,11 +90,10 @@ function timeCorrectionText(chart: SajuChart): string {
   if (missing) return `${head}. ${missing}`;
   const entered = civilFromMs(Math.round(t.instantMs + offset * MINUTE_MS));
   const std = civilFromMs(stdWallMs);
-  const used = t.localSolarTime;
   const chain = isDst
-    ? `입력 ${hhmm(entered.hour, entered.minute)} → 서머타임 1시간을 빼 ${hhmm(std.hour, std.minute)} → ${hms(localMs)}`
-    : `입력 ${hhmm(entered.hour, entered.minute)} → ${hms(localMs)}`;
-  return `${head}. ${chain}(초는 버리고 ${hhmm(used.hour, used.minute)} 기준으로 계산)`;
+    ? `태어난 시각 ${hhmm(entered.hour, entered.minute)} → 서머타임 1시간을 빼 ${hhmm(std.hour, std.minute)} → 그 지역 시각 ${clockText(localMs)}`
+    : `태어난 시각 ${hhmm(entered.hour, entered.minute)} → 그 지역 시각 ${clockText(localMs)}`;
+  return `${head}. ${chain}`;
 }
 
 /** 서머타임·과거 표준시: 이 출생에 실제로 적용됐을 때만 */
@@ -128,6 +134,6 @@ export function calcBasis(chart: SajuChart): CalcBasis {
     clockDiff: clockDiffText(chart),
     calendar: '년·월주는 절기 기준이고, 절입 전후는 경도 보정 없이 시계 시각(태어난 실제 순간)으로 판정해요. 음력은 한국천문연구원 자료예요',
     counting: '오행·십성 개수는 겉으로 드러난 천간·지지 글자만 셉니다(지장간은 세지 않습니다)',
-    notices: chart.notices.map((n) => ({ code: n.code, message: n.message, details: noticeDetails(n) })),
+    notices: chart.notices.map((n) => ({ code: n.code, message: n.message, details: noticeDetails(n, chart) })),
   };
 }
