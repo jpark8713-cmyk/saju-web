@@ -8,7 +8,7 @@
 
 1. Docker Desktop을 켜고, Git Bash에서 `docker version`·`docker info`가 되는지 봐요.
 2. 메모리가 빠듯하면 Docker Desktop 설정(Resources)이나 `%UserProfile%\.wslconfig`의 `memory=`로 Docker 상한을 4GB쯤으로 둬요.
-3. 저장소를 받고(`git clone <비공개 저장소 주소>`), 저장소 루트로 가요. 처음이면 `README.md`의 "새 PC에서 처음 시작하기"를 먼저 해요(이 리허설은 Node만 있으면 돼요. `npm ci`는 안 해도 돼요).
+3. 저장소를 받고(`git clone https://github.com/jpark8713-cmyk/saju-web.git`, 비공개 저장소라 접근 권한이 있는 GitHub 계정으로 로그인), 저장소 루트로 가요. 처음이면 `README.md`의 "새 PC에서 처음 시작하기"를 먼저 해요(이 리허설은 Node만 있으면 돼요. `npm ci`는 안 해도 돼요).
 4. `cp .env.rehearsal.example .env.rehearsal` 후 `REFUND_ID_SECRET`(32자 이상, 만드는 명령은 파일 안에 있어요)을 채워요. 리포트·PDF까지 볼 거면 `LLM_API_KEY`도 넣어요. 이 파일은 커밋되지 않아요. 값은 대화창에 붙여 넣지 않아요.
 
 ## 2. 실행

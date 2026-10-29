@@ -12,7 +12,7 @@
 ## 새 PC에서 처음 시작하기
 
 1. **설치:** Git, Node.js 26.13.0(`Dockerfile`의 `FROM`과 같은 버전, nodejs.org 공식 설치 파일). Docker 리허설을 할 PC라면 Docker Desktop(WSL 2)도요.
-2. **저장소 받기:** `git clone <비공개 저장소 주소>` → 저장소 폴더로 이동.
+2. **저장소 받기:** `git clone https://github.com/jpark8713-cmyk/saju-web.git`(비공개 저장소, 접근 권한이 있는 GitHub 계정으로 로그인) → 저장소 폴더로 이동.
 3. **의존성:** `npm ci` → `npx playwright install chromium`(PDF·화면 테스트용).
 4. **환경 설정:** `cp .env.example .env` 후 필요한 값만 채워요(아래 "환경 변수"). 비용 없이 돌리려면 `ENABLE_FAKE_LLM=true`, `PAYMENT_PROVIDER=mock`. 비밀값(API 키 등)은 `.env`에만 두고 커밋하지 않아요(`.gitignore`가 `.env`, `.env.*`, `samples-output/`, `node_modules/`를 빼요).
 5. **테스트:** `npm run typecheck` → `npm test` → `npm run e2e`(포트 3100) → `npm run e2e:prod`(포트 3200). 다른 작업이 그 포트를 쓰면 `PW_PORT`와 `NEXT_DIST_DIR`를 바꿔요(`CLAUDE.md`).
