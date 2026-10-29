@@ -52,46 +52,52 @@ describe('계산 오류 사례(가상 데이터)의 사실 목록', () => {
     expect(numberOf.get('dayMaster')).toBe(numberOf.get('pillar.day.stem'));
     const elementNs = new Set(['elements.summary', 'elements.wood', 'elements.metal', 'elements.earth'].map((id) => numberOf.get(id)));
     expect(elementNs.size).toBe(1);
-    // 을(乙) 상관 · 갑(甲) 식신 · 식상 묶음 → "표현·재능" 한 줄
-    const siksang = ['pillar.year.stem', 'tenGod.year.stem', 'tenGod.hour.stem', 'pillar.hour.stem', 'tenGodGroup.siksang'].map((id) => numberOf.get(id));
+    // 인(寅) 식신(지지) · 갑(甲) 식신(천간) · 식상 묶음 → "표현·재능" 한 줄
+    const siksang = ['pillar.day.branch', 'tenGod.day.branch', 'tenGod.hour.stem', 'pillar.hour.stem', 'tenGodGroup.siksang'].map((id) => numberOf.get(id));
     expect(new Set(siksang).size).toBe(1);
-    // 미(未) 정관 · 진(辰) 편관 · 진(辰) 편관 · 관성 묶음 → "규칙·책임" 한 줄
-    const gwan = ['tenGod.month.branch', 'pillar.day.branch', 'tenGod.hour.branch', 'tenGodGroup.gwanseong'].map((id) => numberOf.get(id));
+    // 미(未) 정관 · 미(未) 정관 · 진(辰) 편관 · 관성 묶음 → "규칙·책임" 한 줄
+    const gwan = ['tenGod.year.branch', 'tenGod.month.branch', 'pillar.hour.branch', 'tenGodGroup.gwanseong'].map((id) => numberOf.get(id));
     expect(new Set(gwan).size).toBe(1);
+    // 원국 안의 관계(정(丁)-임(壬) 천간합 두 번)도 타고난 사실 묶음에 들어간다
     expect(items.filter((e) => e.group === 'natal').map((e) => e.id)).toEqual([
       'me', 'elements', 'group.bigeop', 'group.siksang', 'group.jaeseong', 'group.gwanseong', 'group.inseong',
+      'relation.stemCombine.year.stem+day.stem', 'relation.stemCombine.month.stem+day.stem',
     ]);
   });
 
   it('사실 문장은 이 사람에 대한 사실만 쉬운 말로 말한다', () => {
     expect(textOf('dayMaster')).toBe('나를 나타내는 글자는 태어난 날의 윗글자 임(壬)이에요. 큰 강물 같은 물의 기운이에요.');
-    expect(textOf('elements.summary')).toBe('내 사주 8글자의 기운은 흙 3개 · 나무 2개 · 물 2개 · 불 1개 · 쇠 0개예요. 흙이 가장 많고 쇠는 없어요.');
-    expect(textOf('tenGod.year.stem')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 해·시의 윗글자 을(乙)·갑(甲) 2개가 표현·재능을 뜻하는 글자예요. 모두 내가 키워 내는 나무의 기운이에요.');
-    expect(textOf('tenGod.year.branch')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 해의 아랫글자 사(巳)가 재물·활동을 뜻하는 글자예요. 내가 다스리는 불의 기운이에요.');
-    expect(textOf('tenGod.month.stem')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 달의 윗글자 계(癸)가 자립·경쟁을 뜻하는 글자예요. 나와 같은 물의 기운이에요.');
-    expect(textOf('tenGodGroup.gwanseong')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 달·날·시의 아랫글자 미(未)·진(辰)·진(辰) 3개가 규칙·책임을 뜻하는 글자예요. 모두 나를 다스리는 흙의 기운이에요.');
+    expect(textOf('elements.summary')).toBe('내 사주 8글자의 기운은 흙 3개 · 나무 2개 · 불 2개 · 물 1개 · 쇠 0개예요. 흙이 가장 많고 쇠는 없어요.');
+    // 천간과 지지에 걸친 묶음(인(寅)·갑(甲))
+    expect(textOf('tenGod.hour.stem')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 날의 아랫글자 인(寅), 태어난 시의 윗글자 갑(甲) 2개가 표현·재능을 뜻하는 글자예요. 모두 내가 키워 내는 나무의 기운이에요.');
+    expect(textOf('tenGod.year.stem')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 해·달의 윗글자 정(丁)·정(丁) 2개가 재물·활동을 뜻하는 글자예요. 모두 내가 다스리는 불의 기운이에요.');
+    expect(textOf('tenGodGroup.bigeop')).toBe('나와 같은 자립·경쟁의 글자는 나를 나타내는 글자를 뺀 7글자 중에 없어요.');
+    expect(textOf('tenGodGroup.gwanseong')).toBe('나를 나타내는 글자를 뺀 7글자 중 태어난 해·달·시의 아랫글자 미(未)·미(未)·진(辰) 3개가 규칙·책임을 뜻하는 글자예요. 모두 나를 다스리는 흙의 기운이에요.');
     expect(textOf('tenGodGroup.inseong')).toBe('나를 도와주는 배움·보살핌의 글자는 나를 나타내는 글자를 뺀 7글자 중에 없어요.');
-    expect(textOf('daewoon[5]')).toBe('61세(만 59세, 2025년 6월)부터 10년은 정축(丁丑)의 큰 흐름이에요. 윗글자 정(丁)은 불의 기운으로 재물·활동, 아랫글자 축(丑)은 흙의 기운으로 규칙·책임을 뜻해요.');
-    // D-048: 그해 글자와 원국 글자의 관계(병-임 천간충, 오-미 육합)도 사실로 보여 준다
+    expect(textOf('daewoon[5]')).toBe('61세(만 59세, 2027년 4월)부터 10년은 신축(辛丑)의 큰 흐름이에요. 윗글자 신(辛)은 쇠의 기운으로 배움·보살핌, 아랫글자 축(丑)은 흙의 기운으로 규칙·책임을 뜻해요.');
+    // D-048: 그해 글자와 원국 글자의 관계(병-임 천간충, 오-미 육합 두 번)도 사실로 보여 준다
     expect(textOf('seun[0]')).toBe(
       '2026년은 병오(丙午)년이에요. 윗글자 병(丙)과 아랫글자 오(午) 모두 불의 기운이고, 나에게는 재물·활동을 뜻해요. ' +
-        '그해 윗글자 병(丙)은 태어난 날의 윗글자 임(壬)과 서로 부딪치는 관계예요. 그해 아랫글자 오(午)는 태어난 달의 아랫글자 미(未)와 짝을 이뤄 묶이는 관계예요.',
+        '그해 윗글자 병(丙)은 태어난 날의 윗글자 임(壬)과 서로 부딪치는 관계예요. 그해 아랫글자 오(午)는 태어난 해의 아랫글자 미(未)와 짝을 이뤄 묶이는 관계예요. ' +
+        '그해 아랫글자 오(午)는 태어난 달의 아랫글자 미(未)와 짝을 이뤄 묶이는 관계예요.',
     );
   });
 
   it('용어 풀이·전문 표기는 자세히(detail)에만 있고, 조사 표기가 받침에 맞는다', () => {
     const siksang = items.find((e) => e.id === 'group.siksang')!;
     expect(siksang.detail[0]).toBe('식상(식신·상관): 내가 키워 내는 기운의 글자를 함께 부르는 이름이에요.');
-    expect(siksang.detail).toContain('년주 천간 을(乙)은 일간 기준 상관');
+    expect(siksang.detail).toContain('일주 지지 인(寅)은 일간 기준 식신');
+    const jaeseong = items.find((e) => e.id === 'group.jaeseong')!;
+    expect(jaeseong.detail).toContain('재성(정재, 오행 화(火))은 원국 8글자 중 일간(나를 나타내는 글자)을 뺀 7글자에서 2개: 년주 천간 정(丁) 정재, 월주 천간 정(丁) 정재');
     const bigeop = items.find((e) => e.id === 'group.bigeop')!;
-    expect(bigeop.detail).toContain('비겁(겁재, 오행 수(水))은 원국 8글자 중 일간(나를 나타내는 글자)을 뺀 7글자에서 1개: 월주 천간 계(癸) 겁재');
+    expect(bigeop.detail).toContain('비겁(오행 수(水))은 원국 8글자 중 일간(나를 나타내는 글자)을 뺀 7글자에서 0개');
     expect(items.find((e) => e.id === 'seun[0]')!.detail).toContain('병(丙) 편재 · 오(午) 정재');
     for (const e of items) for (const d of e.detail) expect(d).not.toMatch(LEFTOVER_JOSA);
   });
 
   it('차트 강조: 묶음 사실은 그 묶음의 글자 전부, 오행 사실은 가장 많은 기운의 글자도 가리킨다', () => {
-    expect(items.find((e) => e.id === 'group.gwanseong')!.chartRefs).toEqual(['month.branch', 'day.branch', 'hour.branch']);
-    expect(items.find((e) => e.id === 'elements')!.chartRefs).toEqual(expect.arrayContaining(['month.branch', 'day.branch', 'hour.branch', 'elements.earth']));
+    expect(items.find((e) => e.id === 'group.gwanseong')!.chartRefs).toEqual(['year.branch', 'month.branch', 'hour.branch']);
+    expect(items.find((e) => e.id === 'elements')!.chartRefs).toEqual(expect.arrayContaining(['year.branch', 'month.branch', 'hour.branch', 'elements.earth']));
     expect(items.find((e) => e.id === 'group.inseong')!.chartRefs).toEqual(['elements.metal']);
   });
 
@@ -104,7 +110,7 @@ describe('계산 오류 사례(가상 데이터)의 사실 목록', () => {
   it('사실마다 그 사실을 인용한 문장을 화면 순서대로 갖는다 (같은 사실의 다른 근거를 인용해도 연결된다)', () => {
     const evidence = buildEvidence(chart);
     const { items: xs } = buildEvidenceItems(chart, new Map(evidence.map((e) => [e.id, e])), [
-      cite('s0', ['tenGod.year.stem']),
+      cite('s0', ['tenGod.day.branch']),
       cite('s1', ['seun[0]'], '2026년'),
       cite('s2', ['tenGodGroup.siksang', 'tenGod.hour.stem'], '재물'),
     ]);
