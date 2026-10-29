@@ -266,3 +266,36 @@
 - 예행 중 만든 리포트는 실제 Claude API를 쓴다(건당 약 $0.25). 필요한 최소 횟수만, 부르기 전에 알리고 만든다.
 - 예행 서버는 접근 제한(2-16)을 건 상태로만 띄운다. 배너가 보이고 `/api/health`가 `rehearsal`인지 매번 확인한다.
 - 출시로 넘어갈 때는 `REHEARSAL_MODE`·`PAYMENT_PROVIDER=mock`을 지우고(2-17), 판매 주제의 `reviewed`가 모두 `true`여야 운영 서버가 뜬다(D-058).
+
+## 9. 운영 유지보수 (2026-10-29 작성, 서버에서 아직 해 보지 않음)
+
+표시: **[확인 못 함]**은 이 PC에서 실제로 해 보지 못한 단계다. 첫 서버를 만들 때 한 번 해 보고 표시를 지운다.
+
+### 9-1. 서버 OS 보안 업데이트 자동 적용 (처음 한 번)
+
+1. `sudo apt install -y unattended-upgrades` 후 `sudo dpkg-reconfigure -plow unattended-upgrades`에서 "예"를 고른다. NCP Ubuntu 이미지에 이미 켜져 있는지는 [확인 못 함].
+2. `/etc/apt/apt.conf.d/50unattended-upgrades`에서 `Unattended-Upgrade::Automatic-Reboot "true";`와 `Unattended-Upgrade::Automatic-Reboot-Time "04:30";`을 켠다. 커널 보안 업데이트는 재부팅해야 적용된다.
+3. 재부팅 뒤 앱은 `--restart unless-stopped`로 자동으로 다시 뜬다. 다시 뜰 때 시작 점검이 "생성 중" 주문을 실패로 바꾸므로(4장) 손님이 적은 새벽으로 잡는다.
+4. 확인: `sudo unattended-upgrade --dry-run --debug`에 오류가 없는지, 다음 날 `/var/log/unattended-upgrades/`에 기록이 생겼는지 본다 [확인 못 함].
+
+### 9-2. 월 1회 점검 (약 1시간)
+
+1. **Node 보안 버전 확인:** https://nodejs.org/en/blog/vulnerability 에서 지금 쓰는 Node(`Dockerfile`의 `node:26.7.0-bookworm-slim`, 개발 PC도 같은 버전)에 보안 수정판이 나왔는지 본다. 있으면 `Dockerfile` 두 `FROM` 줄과 개발 PC Node를 같은 패치 버전으로 올린다.
+2. **npm 의존성 점검(개발 PC):** `npm audit --omit=dev`(운영에 실리는 것)와 `npm audit`을 본다. high·critical이 있으면 `npm update <패키지>`나 버전을 올리고, 고친 뒤 `npm test`와 화면 테스트(`npx playwright test`, 운영 빌드 테스트)를 돌린다.
+3. **새로 빌드:** `docker build --pull --no-cache -t saju-web:<날짜> .` — `--pull`은 베이스 이미지의 최신 보안 패치를, `--no-cache`는 이미지 안 Debian 패키지·Chromium을 새로 받게 한다. 이미지는 8-4 방식(이 PC에서 빌드해 옮기거나 서버에서 빌드)대로 만든다.
+4. **교체 전 백업:** 5장 수동 백업을 1번 하고 버킷에 올라갔는지 본다.
+5. **교체:** `docker tag saju-web:current saju-web:previous` → `docker tag saju-web:<날짜> saju-web:current` → `docker stop saju-web && docker rm saju-web` → 3장 5번 `docker run`.
+6. **확인:** `curl -s https://<도메인>/api/health`가 `"mode":"production"`, `docker logs saju-web`에 `[시작 점검]` 거부가 없음, 화면에서 입력 → 미리보기가 되는지.
+7. **되돌리기(문제가 있으면):** `docker stop saju-web && docker rm saju-web` 후 3장 5번을 `saju-web:previous`로 띄운다. 새 버전이 DB 구조를 바꿨다면 4번 백업으로 복원한다(5장).
+8. 오래된 이미지 정리: `docker image prune` (현재·이전 태그는 남는다).
+9. 한 일과 버전을 `Docs/decisions.md`나 운영 메모에 한 줄 남긴다.
+
+### 9-3. 보안 공지가 났을 때 (임시 점검)
+
+대상: Node.js, Next.js, React, Chromium(Playwright), nginx·OpenSSL 등 서버 패키지, 그 밖의 npm 패키지.
+
+1. **우리가 쓰는지 본다:** Node는 `docker exec saju-web node -v`, npm 패키지는 `npm ls <패키지>`(개발 PC), 서버 패키지는 `apt list --installed 2>/dev/null | grep <이름>`.
+2. **영향받는 버전인지 본다:** 공지의 "영향 버전·수정 버전"과 비교한다. 해당 없으면 메모만 남기고 끝낸다.
+3. **수정판이 있으면:** 서버 패키지는 `sudo apt update && sudo apt upgrade`(nginx는 `sudo systemctl reload nginx`), 앱·Node·Chromium은 9-2의 1~7번을 바로 한다(테스트 포함).
+4. **수정판이 아직 없고 공격이 퍼지고 있으면:** 공지의 임시 조치(설정 끄기, nginx에서 해당 경로 막기 등)를 따른다. 심하면 nginx에서 점검 안내만 보내고 결제를 멈춘다. 조치와 해제 시점을 기록한다.
+5. 개인정보 유출이 의심되면 법정 신고 절차를 따른다(`LAUNCH_CHECKLIST` 2-3·2-5 법적 검토 항목과 함께 정한다) [확인 못 함: 신고 기준·기한은 법적 검토 대상].
