@@ -37,6 +37,12 @@ test('시작 → 입력 → 계산 → 미리보기 → 결제 → 생성 → �
   const sections = await page.locator('[data-testid="report-document"] [data-section]').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')));
   expect(sections).toEqual(['summary', 'traits', 'topics', 'daewoon', 'yearly', 'months', 'years', 'disclaimer']);
   await expect(page.getByTestId('basis-counting')).toContainText('지장간은 세지 않습니다');
+  // D-056 계산 기준: 지역 모름(동경 127°) 14:30 → 보정 차이와 예시가 맞물리고, 해당 없는 표준시·기둥 차이 줄은 없다
+  await expect(page.getByTestId('basis-time')).toContainText('표준시보다 32분 늦은 그 지역 시각을 써요. 입력 14:30 → 13:58:00');
+  await expect(page.getByTestId('basis-jasi')).toContainText('시주는 다음 날 기준 자시');
+  await expect(page.getByTestId('basis-calendar')).toContainText('경도 보정 없이 시계 시각');
+  await expect(page.getByTestId('basis-timezone')).toHaveCount(0);
+  await expect(page.getByTestId('basis-clock')).toHaveCount(0);
   // D-052: 월별 흐름 12칸(계절 묶음 머리 4개), 10년 흐름 10칸, 올해·내년 칸 아래 링크 줄
   await expect(page.locator('[data-section="months"] [data-period-group]')).toHaveCount(12);
   await expect(page.locator('[data-section="months"]').getByTestId('period-cluster')).toHaveCount(4);
@@ -109,6 +115,29 @@ test('태어난 지역: 시도를 고른 뒤 시군구를 고르고, 같은 이�
   await expect(page.getByTestId('preview-document')).toBeVisible();
   // 미리보기 근거에 실제 쓴 경도가 나온다
   await expect(page.getByTestId('preview-document')).toContainText('동경 126.91°');
+});
+
+test('경도 보정으로 시주가 달라지면 계산 기준에 한 줄, 서머타임 출생은 표준시 줄(D-056)', async ({ page }) => {
+  // 서울 종로구(126.98°) 1999-12-31 23:30 → 보정 22:57(해시). 시계 시각 그대로면 임자(壬子)시
+  await fillBirth(page, { year: '1999', month: '12', day: '31' });
+  await page.getByLabel('시', { exact: true }).selectOption('23');
+  await page.getByLabel('분', { exact: true }).selectOption('30');
+  await page.getByTestId('region-province').selectOption({ label: '서울' });
+  await page.getByTestId('region-district').selectOption({ label: '종로구' });
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('preview-document')).toBeVisible();
+  await expect(page.getByTestId('basis-time')).toContainText('표준시보다 32분 5초 늦은 그 지역 시각을 써요. 입력 23:30 → 22:57:55(초는 버리고 22:57 기준으로 계산)');
+  await expect(page.getByTestId('basis-clock')).toHaveText('참고: 이 리포트는 경도 보정 시각으로 기둥을 정했어요. 보정 없이 시계 시각 그대로(23:30) 보는 만세력에서는 시주가 임자(壬子)로 다르게 나올 수 있어요');
+  // 눈에 띄는 안내 상자가 아니라 계산 기준 섹션 안의 한 줄
+  await expect(page.locator('[data-section="disclaimer"]').getByTestId('basis-clock')).toHaveCount(1);
+  await expect(page.getByTestId('chart-notices')).toHaveCount(0);
+  await expect(page.getByTestId('basis-timezone')).toHaveCount(0);
+
+  // 1987 서머타임 출생: 표준시 줄이 나온다
+  await fillBirth(page, { year: '1987', month: '7', day: '15' });
+  await page.getByTestId('input-submit').click();
+  await expect(page.getByTestId('preview-document')).toBeVisible();
+  await expect(page.getByTestId('basis-timezone')).toHaveText('표준시: 서머타임 기간이라 1시간을 빼서 계산했어요');
 });
 
 test('음력 윤달 + 시간 모름으로 미리보기까지, 없는 윤달은 서버 검증 문구로 돌아온다', async ({ page }) => {

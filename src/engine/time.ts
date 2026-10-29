@@ -11,8 +11,16 @@ const offsetFormatter = new Intl.DateTimeFormat('en-US', {
   timeZoneName: 'longOffset',
 });
 
+/**
+ * 1954-03-21 표준시 변경(UTC+9 → UTC+8:30). 대통령령 제876호 원문은 "3월 21일 오전 0시 30분부터"(옛 시계 기준)인데
+ * tzdb는 0시에 바꾼다. 원문대로 그 30분(UTC 1954-03-20 15:00~15:30)은 UTC+9로 둔다(Docs/TIMEZONE_HISTORY.md, D-056).
+ * 그래서 03-21 00:00~00:29가 두 번 있는 시각이 된다.
+ */
+const DECREE_1954_KEEP_UTC9 = { fromMs: Date.UTC(1954, 2, 20, 15, 0), toMs: Date.UTC(1954, 2, 20, 15, 30) };
+
 /** 주어진 순간의 Asia/Seoul UTC 오프셋(분, 초 단위 오프셋은 반올림하지 않고 분수로 유지) */
 export function seoulOffsetMinutes(instantMs: number): number {
+  if (instantMs >= DECREE_1954_KEEP_UTC9.fromMs && instantMs < DECREE_1954_KEEP_UTC9.toMs) return KST_STANDARD_OFFSET_MIN;
   const part = offsetFormatter.formatToParts(new Date(instantMs)).find((p) => p.type === 'timeZoneName');
   const text = part?.value ?? 'GMT';
   const match = /^GMT([+-])(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
@@ -35,7 +43,7 @@ interface WallResolution {
 
 /**
  * 벽시계 시각을 순간으로 바꾼다.
- * - 두 번 있는 시각(서머타임 종료)은 앞의 순간(서머타임 쪽)을 택한다.
+ * - 두 번 있는 시각(서머타임 종료, 1954-03-21 표준시 변경)은 앞의 순간(바뀌기 전 시계 쪽)을 택한다.
  * - 없는 시각(서머타임 시작)은 전환 직전 오프셋(표준시)으로 해석한다.
  */
 export function resolveSeoulWallTime(dt: CivilDateTime): WallResolution {

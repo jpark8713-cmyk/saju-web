@@ -89,6 +89,13 @@ export function buildChart(input: SajuInput, options: ChartOptions): SajuChart {
     settings: { ...settings, longitudeUsed },
     time,
     warnings,
-    notices: buildNotices(warnings, dayJie, settings.historicalTimezone, hourOnly !== undefined ? { hour: hourOnly, segments } : null),
+    // 두 번 있는 시각의 앞 순간이 UTC+9면 서머타임 종료가 아니라 1954-03-21 표준시 변경으로 생긴 겹침이다(서머타임 중에는 UTC+10·UTC+9:30)
+    notices: buildNotices(
+      warnings,
+      dayJie,
+      settings.historicalTimezone,
+      hourOnly !== undefined ? { hour: hourOnly, segments } : null,
+      time.ambiguousWallTime && time.utcOffsetMinutes === 540 ? 'standardChange' : 'dst',
+    ),
   };
 }

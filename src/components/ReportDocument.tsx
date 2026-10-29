@@ -348,9 +348,13 @@ export function ReportDocument({ view, mode, afterPreview }: { view: ReportView 
           이 리포트는 오락·참고용이며 의료·투자·법률 판단을 대신하지 않습니다.
         </p>
         <ul className="hint" style={{ margin: 0, paddingLeft: 18 }}>
-          <li>자시 처리: {view.basis.jasi}</li>
-          <li>시간 보정: {view.basis.timeCorrection}</li>
-          <li>달력: {view.basis.calendar}</li>
+          <li data-testid="basis-jasi">자시 처리: {view.basis.jasi}</li>
+          <li data-testid="basis-time">시간 보정: {view.basis.timeCorrection}</li>
+          {/* 서머타임·과거 표준시는 이 출생에 적용됐을 때만(D-056) */}
+          {view.basis.timezone && <li data-testid="basis-timezone">표준시: {view.basis.timezone}</li>}
+          {/* 보정 때문에 시계 시각 그대로 볼 때와 기둥이 다르면 담담한 한 줄(D-056) */}
+          {view.basis.clockDiff && <li data-testid="basis-clock">참고: {view.basis.clockDiff}</li>}
+          <li data-testid="basis-calendar">달력: {view.basis.calendar}</li>
           <li data-testid="basis-counting">{view.basis.counting}</li>
         </ul>
       </section>

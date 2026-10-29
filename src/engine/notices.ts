@@ -16,6 +16,10 @@ export const NOTICE_MESSAGES: Readonly<Record<ChartWarning, string>> = Object.fr
     '입력하신 시각은 서머타임이 끝나면서 두 번 있었던 시각이에요. 서머타임 기준(앞의 시각)으로 계산했어요.',
 });
 
+/** 1954-03-21 표준시 변경으로 생긴 두 번 있는 시각(D-056). 처리는 서머타임 종료와 같고 문구만 다르다 */
+export const AMBIGUOUS_STANDARD_CHANGE_MESSAGE =
+  '입력하신 시각은 1954년 3월 21일 표준시가 바뀌면서 두 번 있었던 시각이에요. 바뀌기 전 표준시(앞의 시각)로 계산했어요.';
+
 function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
@@ -37,9 +41,11 @@ export function buildNotices(
   jieOnDay: JieInstant | null,
   historicalTimezone: boolean,
   minute: ChartNotice['minute'] | null = null,
+  ambiguousCause: 'dst' | 'standardChange' = 'dst',
 ): ChartNotice[] {
   return warnings.map((code): ChartNotice => {
-    const base = { code, message: NOTICE_MESSAGES[code] };
+    const message = code === 'ambiguousWallTime' && ambiguousCause === 'standardChange' ? AMBIGUOUS_STANDARD_CHANGE_MESSAGE : NOTICE_MESSAGES[code];
+    const base = { code, message };
     if (code === 'unknownMinuteOnBoundary') return minute ? { ...base, minute } : base;
     if (code !== 'unknownTimeOnJieDay' || !jieOnDay) return base;
     return {
