@@ -1275,3 +1275,24 @@ D-052의 진행 기록을 최종 상태로 묶는다.
   - **10년 흐름 행 스타일:** 큰 흐름 표시를 뺀 줄도 모두 같은 행 스타일(`period-group`: 쪽 나눔 방지, PDF 격자)을 쓴다. 리뷰 MEDIUM이었다.
   - **만 나이 계산:** `src/engine/age.ts`의 `fullAge` 하나로 합쳤다. 아이 리포트 판정(`report/audience`)과 대운 표기(`daewoonStartAge`)가 같은 함수를 쓴다.
   - **근거 팝업:** 해마다의 사실에 나오는 "큰 흐름은 첫 큰 흐름 전이고"는 그대로 둔다.
+
+## D-058 운영 빌드 시작 거부와 예행 모드 (2026-10-29, 사업자 결정)
+
+- **배경:** 운영 이미지는 `NODE_ENV=production`이지만, 환경 파일로 `NODE_ENV=development`를 주면 `next start`가 경고만 하고 따랐다. 그러면 목 결제·가짜 LLM이 켜지고 운영 시작 점검(APP_ORIGIN 등)이 빠졌다. 운영 빌드로 재현했다(목 결제창 200). 또 `reviewed`는 어디서도 쓰이지 않아, 검수 전 주제도 판매됐다.
+- **운영 빌드 판정:** `next.config.ts`를 함수로 두고, Next가 넘기는 단계(phase)를 `SAJU_BUILD_PHASE`로 번들에 박는다. `next dev`는 phase-development-server, `next build`·`start`는 운영 빌드다. NODE_ENV와 상관없이 판단한다(`src/config/flags.ts`). 테스트·스크립트(번들 밖)는 개발로 본다.
+- **시작 거부(`src/config/deployGuard.ts`, 시작 점검에서 저장소를 열기 전에 확인):**
+  - A: 운영 빌드인데 `NODE_ENV`가 development·test.
+  - 가짜 LLM: 운영 빌드에서 `ENABLE_FAKE_LLM`이 들어 있으면 값과 상관없이 거부한다(예행 모드여도).
+  - 목 결제: 운영 빌드에서 `PAYMENT_PROVIDER=mock`은 `REHEARSAL_MODE=1`일 때만 허용한다.
+  - C: 운영 빌드에서 판매 주제(`enabled`) 중 `reviewed: false`가 있으면 거부한다. 예행 모드면 허용한다.
+  - 예행 모드와 실제 PG 설정(`PAYMENT_PROVIDER`가 mock이 아닌 값, `PAYMENT_CLIENT_KEY`, `PAYMENT_SECRET_KEY`)이 함께 있으면 거부한다.
+  - `REHEARSAL_MODE`가 `1`이 아닌 다른 값이어도 거부한다.
+- **예행 모드:**
+  - 모든 화면 맨 위에 "리허설 서버 — 실제 결제 아님" 배너를 띄운다. PDF(인쇄)에는 넣지 않는다.
+  - 배너는 서버를 띄울 때의 환경변수로 정해야 해서, 루트 레이아웃이 요청마다 그린다(`connection()`).
+  - `GET /api/health`가 `{status, mode}`(production·rehearsal·development)를 돌려준다.
+- **지금 상태:** 판매 주제 3개(재물·일·관계)가 모두 `reviewed: false`라, 예행 모드가 아닌 운영 서버는 지금 시작하지 않는다. 운영 빌드 화면 테스트는 예행 모드로 띄운다.
+- **테스트:**
+  - 단위 테스트: `tests/web/deployGuard.test.ts`.
+  - 운영 빌드 화면 테스트: `tests/e2e/prod.spec.ts`가 같은 빌드를 PW_PORT+1에 조건마다 띄워, 거부 6가지와 예행 모드 + 목 결제 허용을 확인한다.
+  - 테스트 서버는 `.env` 파일 값이 끼어들지 않게 개발용 값을 빈 값으로 못 박는다.

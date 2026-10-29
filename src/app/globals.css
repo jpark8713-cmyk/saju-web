@@ -597,3 +597,20 @@ a:hover {
 .job-state.is-done{background:#e3efe8;color:#2f6b4f}
 .job-state.is-templated{background:#fbefd9;color:#9a5b00}
 
+
+/* 예행 모드 배너(D-058): 모든 화면 맨 위, 인쇄(PDF)에는 넣지 않는다 */
+.rehearsal-banner {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--accent);
+  color: var(--card);
+  text-align: center;
+  font-weight: 700;
+  padding: 8px 16px;
+}
+@media print {
+  .rehearsal-banner {
+    display: none;
+  }
+}

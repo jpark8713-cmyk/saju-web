@@ -19,7 +19,7 @@
 
 | 이름 | 운영 | 설명 |
 | --- | --- | --- |
-| `NODE_ENV` | `production` (이미지에 고정) | 개발 전용 기능(목 결제, 가짜 LLM)은 development·test에서만 켜진다 |
+| `NODE_ENV` | `production` (이미지에 고정) | 환경 파일로 `development`·`test`를 주면 서버가 시작하지 않는다(D-058). 운영 빌드인지는 빌드 때 번들에 박은 단계로 판단한다 |
 | `DATABASE_URL` | `file:/data/saju.db` (이미지 기본값) | 없으면 서버가 시작하지 않는다 |
 | `DB_REQUIRE_VOLUME` | `true` (이미지에 고정) | `/data`에 서버 경로나 이름 지정 볼륨이 연결되지 않았거나, 이름 없는 볼륨·메모리(tmpfs)면 서버가 시작하지 않는다 |
 | `APP_ORIGIN` | **필수** | 서비스 주소(예: `https://example.com`). PDF 생성기와 결제창 복귀 주소가 이 값만 쓴다. 없으면 서버가 시작하지 않는다 |
@@ -27,13 +27,16 @@
 | `TRUST_PROXY` | **필수** (`true`) | nginx가 `X-Real-IP`를 덮어쓰는 구성에서 켠다. 안 켜면 앱은 모든 요청을 한 IP로 세고, 시작할 때 경고를 남긴다 |
 | `LLM_API_KEY` | 필수 | Claude API 키 |
 | `LLM_MODEL` | 선택 | 비우면 `claude-sonnet-5-5`(D-021) |
-| `PAYMENT_PROVIDER` | PG 계약 뒤 | `mock`은 운영에서 동작하지 않는다. 실제 PG 어댑터는 별도 Phase |
+| `PAYMENT_PROVIDER` | PG 계약 뒤 | `mock`은 예행 모드(`REHEARSAL_MODE=1`)에서만 쓸 수 있고, 그 밖에는 서버가 시작하지 않는다(D-058). 실제 PG 어댑터는 별도 Phase |
 | `PAYMENT_METHODS_ENABLED` | 선택 | 켤 결제 수단(쉼표 구분). 기본 `kakaopay` |
 | `PAYMENT_CLIENT_KEY`, `PAYMENT_SECRET_KEY` | PG 계약 뒤 | PG 키 |
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` | 메일 서비스 연동 뒤 | `console`은 개발·테스트 전용이다. 운영에서는 실제 메일 어댑터가 생길 때까지 메일이 나가지 않고(발송 실패로 기록), 고객은 화면에서 PDF를 받는다 |
 | `STORAGE_PROVIDER`, `STORAGE_BUCKET`, `DOWNLOAD_TOKEN_TTL_DAYS` | 쓰지 않음 | PDF는 `/data/pdf/`에 저장한다. 링크·보관 기간(30일)은 `src/config/delivery.ts`에서 바꾼다(D-033) |
-| `ENABLE_FAKE_LLM` | 쓰지 않음 | 개발·테스트 전용 |
+| `ENABLE_FAKE_LLM` | **넣지 않는다** | 개발 서버 전용. 운영 빌드에서는 값이 무엇이든 들어 있으면 서버가 시작하지 않는다(D-058) |
+| `REHEARSAL_MODE` | 예행 연습 때만 `1` | 출시 전 예행 연습 서버 전용(D-058). 모든 화면 위에 "리허설 서버 — 실제 결제 아님" 배너가 나오고 `GET /api/health`가 `mode: rehearsal`을 돌려준다. 이때만 `PAYMENT_PROVIDER=mock`과 검수 전 주제를 허용한다. 실제 PG 설정(`PAYMENT_PROVIDER`가 mock이 아닌 값, `PAYMENT_CLIENT_KEY`, `PAYMENT_SECRET_KEY`)과 함께 있으면 시작하지 않는다. `1` 말고 다른 값도 시작 거부. **출시 전에 지운다** |
 | `DATAGOKR_API_KEY` | 쓰지 않음 | 천문연 대조 fixture 생성용 |
+
+**시작 거부(D-058):** 위 조건 말고도 판매 중인 주제(`enabled: true`) 가운데 검수를 마치지 않은 것(`reviewed: false`)이 있으면, 예행 모드가 아닌 운영 서버는 시작하지 않는다(`src/config/topics.ts`). 거부 이유는 `docker logs saju-web`에 `[시작 점검] 서버를 시작하지 않아요: 운영 설정 점검 실패: …`로 남는다(설정 이름과 주제 id만, 값은 남기지 않는다). 상태 확인: `curl -s https://<도메인>/api/health` → `{"status":"ok","mode":"production"}`.
 
 비밀값은 서버의 환경 파일(`/etc/saju/app.env`, 권한 600)에만 둔다. 백업 업로드용 Object Storage 인증키는 따로 `/etc/saju/backup.env`(권한 600)에 둔다(5장). 둘 다 저장소에 넣지 않는다.
 

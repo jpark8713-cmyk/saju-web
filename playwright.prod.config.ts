@@ -1,4 +1,7 @@
-// 운영 빌드 확인: next build + next start(NODE_ENV=production). 목 결제(PAYMENT_PROVIDER=mock)를 켜 두어도 꺼져 있어야 한다(D-025).
+// 운영 빌드 확인: next build + next start(NODE_ENV=production).
+// 지금 판매 주제가 검수 전(reviewed=false)이라 순수 운영 모드는 시작을 거부한다(D-058). 그래서 이 서버는 예행 모드(목 결제 없음)로 띄우고,
+// 개발용 값은 빈 값으로 못 박는다(next start가 읽는 .env 파일 값이 끼어들지 않게).
+// 시작 거부 조건과 목 결제를 켠 예행 모드는 prod.spec.ts가 같은 빌드로 서버를 따로 띄워(PW_PORT+1) 확인한다.
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
@@ -21,7 +24,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}`,
     reuseExistingServer: false,
     timeout: 600_000,
-    // 일부러 켜 둔다: 운영 환경에서는 이 값과 관계없이 꺼져야 한다
-    env: { DATABASE_URL: `file:${DB}`, APP_ORIGIN: `http://localhost:${PORT}`, REFUND_ID_SECRET: 'e2e-only-secret-0123456789-0123456789', TRUST_PROXY: 'true', PAYMENT_PROVIDER: 'mock', ENABLE_FAKE_LLM: 'true' },
+    env: { DATABASE_URL: `file:${DB}`, APP_ORIGIN: `http://localhost:${PORT}`, REFUND_ID_SECRET: 'e2e-only-secret-0123456789-0123456789', TRUST_PROXY: 'true', REHEARSAL_MODE: '1', PAYMENT_PROVIDER: '', ENABLE_FAKE_LLM: '', PAYMENT_CLIENT_KEY: '', PAYMENT_SECRET_KEY: '' },
   },
 });
