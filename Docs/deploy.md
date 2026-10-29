@@ -9,7 +9,7 @@
 | 구성 요소 | 내용 |
 | --- | --- |
 | 서버 | NCP Server(Ubuntu 22.04 이상) 1대. Docker, nginx, aws CLI 설치 |
-| 앱 | `Dockerfile`로 만든 이미지 1개(Node 26.7.0, 포트 3000) |
+| 앱 | `Dockerfile`로 만든 이미지 1개(Node 26.13.0, 포트 3000) |
 | DB | SQLite 파일 `/data/saju.db`. `/data`에 서버 경로(`/srv/saju/data`)나 이름 지정 볼륨이 연결돼 있어야 한다(D-030, D-031) |
 | 백업 | 매시간 온라인 백업 → NCP Object Storage(`deploy/backup-hourly.sh`, systemd 타이머) |
 | 앞단 | nginx: HTTPS 종료, IP별 속도 제한, 본문 64KB 상한, `X-Real-IP` 덮어쓰기(`deploy/nginx.conf`) |
@@ -282,7 +282,7 @@
 
 ### 9-2. 월 1회 점검 (약 1시간)
 
-1. **Node 보안 버전 확인:** https://nodejs.org/en/blog/vulnerability 에서 지금 쓰는 Node(`Dockerfile`의 `node:26.7.0-bookworm-slim`, 개발 PC도 같은 버전)에 보안 수정판이 나왔는지 본다. 있으면 `Dockerfile` 두 `FROM` 줄과 개발 PC Node를 같은 패치 버전으로 올린다.
+1. **Node 보안 버전 확인:** https://nodejs.org/en/blog/vulnerability 에서 지금 쓰는 Node(`Dockerfile`의 `node:26.13.0-bookworm-slim`, 개발 PC도 같은 버전)에 보안 수정판이 나왔는지 본다. 있으면 `Dockerfile` 두 `FROM` 줄과 개발 PC Node를 같은 패치 버전으로 올린다.
 2. **npm 의존성 점검(개발 PC):** `npm audit --omit=dev`(운영에 실리는 것)와 `npm audit`을 본다. high·critical이 있으면 `npm update <패키지>`나 버전을 올리고, 고친 뒤 `npm test`와 화면 테스트(`npx playwright test`, 운영 빌드 테스트)를 돌린다.
 3. **새로 빌드:** `docker build --pull --no-cache -t saju-web:<날짜> .` — `--pull`은 베이스 이미지의 최신 보안 패치를, `--no-cache`는 이미지 안 Debian 패키지·Chromium을 새로 받게 한다. 이미지는 8-4 방식(이 PC에서 빌드해 옮기거나 서버에서 빌드)대로 만든다.
 4. **교체 전 백업:** 5장 수동 백업을 1번 하고 버킷에 올라갔는지 본다.
@@ -306,11 +306,11 @@
 
 - **사건:** eMudhra(emSign) 중간 인증서 8개의 개인키가 약하게 만들어져 노출됐다(CVE-2026-111943). 브라우저·OS는 2026-10-17~22에 차단했고, 브라우저가 아닌 프로그램(서버의 API 클라이언트, 컨테이너 등)은 각자 차단 목록을 받아야 한다.
 - **우리와의 관계:**
-  - **Node(앱의 외부 HTTPS: Claude API, 나중에 PG·메일):** 영향 있음. Node는 자체 인증서 목록을 쓴다. 공식 26.12.1(2026-10-21, 보안 릴리스)에 "차단된 공개키가 든 체인 거부"와 루트 인증서 갱신이 들어 있다. 이 항목이 eMudhra 대응이라는 것은 릴리스 노트 문구로 본 추정이다(관련 PR 본문은 확인 못 함). 같은 릴리스에 TLS·DNS·brotli High 취약점 수정도 있어, 26.7.0인 지금은 올려야 한다(`LAUNCH_CHECKLIST` 1-16).
+  - **Node(앱의 외부 HTTPS: Claude API, 나중에 PG·메일):** 영향 있음. Node는 자체 인증서 목록을 쓴다. 공식 26.12.1(2026-10-21, 보안 릴리스)에 "차단된 공개키가 든 체인 거부"와 루트 인증서 갱신이 들어 있다. 이 항목이 eMudhra 대응이라는 것은 릴리스 노트 문구로 본 추정이다(관련 PR 본문은 확인 못 함). 같은 릴리스에 TLS·DNS·brotli High 취약점 수정도 있다. → 2026-10-29에 개발 PC와 `Dockerfile`을 26.13.0으로 올렸다(D-060).
   - **이미지의 `ca-certificates`(Debian bookworm):** Node는 기본으로 이 목록을 쓰지 않는다. 그래서 앱 영향은 위 Node 업데이트로 막힌다. Debian 패키지에 이번 차단이 들어갔는지는 확인 못 함. `--no-cache` 재빌드로 그때의 최신 패키지를 받는다.
   - **Chromium(PDF):** 이제 서버 안 http 주소만 열어 TLS를 쓰지 않는다(D-059). 영향 없음.
   - **서버의 aws CLI(백업 업로드):** 자체 인증서 묶음을 쓰는 것으로 알려져 있으나, 이번 대응 버전은 확인 못 함. 서버를 만들 때 최신 버전을 설치한다.
-- **할 일:** `Dockerfile` 두 `FROM`을 `node:26.12.1-bookworm-slim` 이상으로 올리고(Docker Hub에 26.12.1·26.13.0 태그가 있는 것을 확인), 개발 PC Node도 같은 버전으로 올린 뒤 테스트하고, `docker build --pull --no-cache`로 다시 빌드한다(9-2).
+- **한 일(2026-10-29, D-060):** 개발 PC를 공식 설치 파일(SHA256 대조)로 26.13.0으로 올리고 `Dockerfile` 두 `FROM`을 `node:26.13.0-bookworm-slim`으로 바꿨다. 이미지 재빌드(`docker build --pull --no-cache`)는 데스크톱 로컬 리허설에서 한다(`Docs/REHEARSAL.md`).
 - **출처:**
   - Node.js 릴리스 목록 https://nodejs.org/dist/index.json (26.12.1 security: true)
   - Node 26 변경 기록 https://github.com/nodejs/node/blob/main/doc/changelogs/CHANGELOG_V26.md

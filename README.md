@@ -11,7 +11,7 @@
 
 ## 새 PC에서 처음 시작하기
 
-1. **설치:** Git, Node.js(`Dockerfile`의 `FROM`과 같은 버전. 지금 26.7.0이고 26.13.0으로 올릴 예정, `Docs/LAUNCH_CHECKLIST.md` 1-16). Docker 리허설을 할 PC라면 Docker Desktop(WSL 2)도요.
+1. **설치:** Git, Node.js 26.13.0(`Dockerfile`의 `FROM`과 같은 버전, nodejs.org 공식 설치 파일). Docker 리허설을 할 PC라면 Docker Desktop(WSL 2)도요.
 2. **저장소 받기:** `git clone <비공개 저장소 주소>` → 저장소 폴더로 이동.
 3. **의존성:** `npm ci` → `npx playwright install chromium`(PDF·화면 테스트용).
 4. **환경 설정:** `cp .env.example .env` 후 필요한 값만 채워요(아래 "환경 변수"). 비용 없이 돌리려면 `ENABLE_FAKE_LLM=true`, `PAYMENT_PROVIDER=mock`. 비밀값(API 키 등)은 `.env`에만 두고 커밋하지 않아요(`.gitignore`가 `.env`, `.env.*`, `samples-output/`, `node_modules/`를 빼요).
@@ -31,7 +31,7 @@
 
 ## 준비물
 
-- **Node.js 26.7.0.** 내장 SQLite(`node:sqlite`)를 써요. 운영 이미지(`Dockerfile`)도 같은 버전이에요.
+- **Node.js 26.13.0.** 내장 SQLite(`node:sqlite`)를 써요. 운영 이미지(`Dockerfile`)도 같은 버전이에요(D-060).
 - **Chromium (Playwright):** PDF 생성과 화면 테스트에 필요해요.
   ```bash
   npx playwright install chromium
