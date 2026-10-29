@@ -7,7 +7,6 @@ import '@fontsource/noto-sans-kr/500.css';
 import '@fontsource/noto-sans-kr/700.css';
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
-import { connection } from 'next/server';
 import type { ReactNode } from 'react';
 import { RehearsalBanner } from '../components/RehearsalBanner';
 import { SERVICE } from '../config/business';
@@ -22,9 +21,8 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default async function RootLayout({ children }: { children: ReactNode }) {
-  // 예행 모드 배너는 빌드 때가 아니라 서버를 띄울 때의 환경변수(REHEARSAL_MODE)로 정해야 해서, 화면을 요청마다 그린다(D-058)
-  await connection();
+export default function RootLayout({ children }: { children: ReactNode }) {
+  // 예행 모드 배너는 화면을 연 뒤 브라우저에서 모드를 묻는다. 레이아웃을 요청마다 그리지 않아 정적 페이지 캐시가 유지된다(D-059)
   return (
     <html lang="ko">
       <body>

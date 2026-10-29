@@ -21,8 +21,10 @@ export interface DeliveryDeps {
   /** 인쇄 페이지를 열어 PDF를 만든다(src/report/pdf.ts). 토큰은 x-render-token 헤더로 넘긴다 */
   renderPdf: (origin: string, orderId: string, renderToken: string) => Promise<Buffer>;
   email: EmailProvider | null;
-  /** 서비스 주소(APP_ORIGIN) */
+  /** 서비스 주소(APP_ORIGIN). 메일의 다운로드 링크에 쓴다 */
   origin: () => string;
+  /** PDF 생성기가 여는 주소(같은 서버 안, D-059). 없으면 origin() */
+  renderOrigin?: () => string;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
   retryDelays?: readonly number[];
@@ -85,7 +87,7 @@ export async function renderAndStore(deps: DeliveryDeps, orderId: string): Promi
   const dropMine = (patch: (d: ReturnType<typeof deliveryOf>) => ReturnType<typeof deliveryOf>) =>
     deps.store.updateOrder(orderId, (o) => withDelivery(o, (d) => patch({ ...d, renderTokens: d.renderTokens.filter((t) => t.hash !== mine) })));
   try {
-    const pdf = await deps.renderPdf(deps.origin(), orderId, raw);
+    const pdf = await deps.renderPdf((deps.renderOrigin ?? deps.origin)(), orderId, raw);
     // 만드는 사이에 보관 기간 정리가 돌았으면 저장하지 않는다(정리 뒤에 PDF가 남지 않게)
     if (!(await stillKeepable(deps.store, orderId, nowOf(deps)))) throw new PdfExpired();
     const sha256 = deps.pdfs.write(orderId, pdf);

@@ -1,6 +1,6 @@
 # 배포 절차 (NCP, Phase 4)
 
-> 상태: 설정 파일과 절차를 준비했다. 이 PC에 Docker가 없어 이미지 빌드와 서버에서의 실행은 아직 확인하지 못했다.
+> 상태: 설정 파일과 절차를 준비했다. 이 PC에 Docker가 없어 이미지 빌드와 서버에서의 실행은 아직 확인하지 못했다(2026-10-29 다시 확인, 8-1).
 > 확인한 것: `next build`, 운영 모드 실행(SQLite), 설정이 빠졌을 때 시작을 멈추는 동작, 백업·복원 스크립트(로컬 파일), 셸 스크립트 문법.
 > 실제 PG 연동은 하지 않았다. 운영 환경에서는 결제하기 버튼이 꺼져 있다.
 
@@ -33,6 +33,7 @@
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` | 메일 서비스 연동 뒤 | `console`은 개발·테스트 전용이다. 운영에서는 실제 메일 어댑터가 생길 때까지 메일이 나가지 않고(발송 실패로 기록), 고객은 화면에서 PDF를 받는다 |
 | `STORAGE_PROVIDER`, `STORAGE_BUCKET`, `DOWNLOAD_TOKEN_TTL_DAYS` | 쓰지 않음 | PDF는 `/data/pdf/`에 저장한다. 링크·보관 기간(30일)은 `src/config/delivery.ts`에서 바꾼다(D-033) |
 | `ENABLE_FAKE_LLM` | **넣지 않는다** | 개발 서버 전용. 운영 빌드에서는 값이 무엇이든 들어 있으면 서버가 시작하지 않는다(D-058) |
+| `PDF_RENDER_ORIGIN` | 비워 둔다 | PDF 생성기가 인쇄 화면을 여는 주소. 기본 `http://127.0.0.1:<PORT>`(같은 컨테이너 안, D-059) |
 | `REHEARSAL_MODE` | 예행 연습 때만 `1` | 출시 전 예행 연습 서버 전용(D-058). 모든 화면 위에 "리허설 서버 — 실제 결제 아님" 배너가 나오고 `GET /api/health`가 `mode: rehearsal`을 돌려준다. 이때만 `PAYMENT_PROVIDER=mock`과 검수 전 주제를 허용한다. 실제 PG 설정(`PAYMENT_PROVIDER`가 mock이 아닌 값, `PAYMENT_CLIENT_KEY`, `PAYMENT_SECRET_KEY`)과 함께 있으면 시작하지 않는다. `1` 말고 다른 값도 시작 거부. **출시 전에 지운다** |
 | `DATAGOKR_API_KEY` | 쓰지 않음 | 천문연 대조 fixture 생성용 |
 
@@ -166,23 +167,61 @@
 | 손실 허용 | 1시간 분량의 기록 손실을 받아들일 수 없게 될 때 | 관리형 DB는 대기 서버로 자동 전환되고 백업 시점 복원을 지원한다 |
 | DB 크기 | DB 파일 5GB 이상 | 매시간 전체 사본을 올리는 비용·시간이 커진다 |
 
-## 8. NCP 예행 연습 준비 (2026-10-29 작성, 서버 생성 전)
+## 8. 예행 연습 (2026-10-29 개정: 이 PC 로컬 리허설 → NCP 짧은 확인)
 
-출시 전에 운영과 같은 이미지·nginx·백업·복원·PDF 생성을 NCP에서 한 번 돌려 보는 절차다. 예행 서버는 `REHEARSAL_MODE=1`(D-058)로 띄우고 외부 접근을 막는다(`LAUNCH_CHECKLIST` 2-16).
+출시 전에 운영과 같은 이미지로 한 번 돌려 본다. 무거운 확인(이미지 빌드, 시작 거부, 목 결제, PDF, 백업·복원)은 이 PC에서 먼저 하고, NCP에서는 이 PC에서 못 보는 것(nginx, 방화벽, 인증서·도메인, 실제 네트워크)만 짧게 본다. 예행 서버는 `REHEARSAL_MODE=1`(D-058)로 띄운다.
 
-### 8-1. 서버 사양 후보
+### 8-1. 이 PC의 Docker 상태 (2026-10-29 확인)
 
-| 후보 | 사양 | 맞는 경우 | 걱정되는 점 |
-| --- | --- | --- | --- |
-| **권장: Standard 2vCPU·8GB, 디스크 50GB** | 이미지 빌드(`next build`)와 Chromium PDF 생성을 서버에서 함께 해도 여유 | 이 PC에 Docker가 없어 서버에서 이미지를 빌드해야 하는 지금 | 비용이 조금 더 든다 |
-| 최소: High CPU 2vCPU·4GB, 디스크 50GB | 실행만 보면 충분(앱 + PDF 1건 생성) | 이미지를 다른 곳에서 빌드해 올릴 때 | 서버에서 빌드하면 메모리가 빠듯할 수 있다(확인 못 함). 스왑 2GB를 함께 만든다 |
-| 빼는 것: Compact 2vCPU·2GB | | | Chromium PDF와 빌드를 같이 하기에 메모리가 모자랄 가능성이 크다 |
+- **설치돼 있지 않다.** 이 터미널(Git Bash·PowerShell)에서 `docker` 명령이 없고, `C:\Program Files\Docker`도 없으며, 설치 프로그램 목록에도 Docker Desktop이 없다. WSL도 설치돼 있지 않다(`wsl -l -v` → "설치되어 있지 않습니다").
+- **설치하려면(내가 할 일):**
+  1. 관리자 PowerShell에서 `wsl --install` → 재부팅.
+  2. Docker Desktop(Windows)을 설치하고 WSL 2 백엔드를 고른다. 실행 후 Claude Code 터미널을 새로 열어 `docker --version`, `docker info`가 되는지 확인한다.
+  3. **메모리:** 이 PC는 15.7GB 중 85%를 이미 쓰고 있다(남은 약 2.4GB). Docker(WSL 2)는 기본으로 메모리의 절반까지 쓸 수 있어 다른 작업이 느려질 수 있다. `%UserProfile%\.wslconfig`에 `[wsl2]`·`memory=4GB`·`swap=4GB`를 넣어 상한을 둔다. 빌드할 때는 다른 큰 프로그램을 닫는다.
+- 설치가 끝나면 8-2를 Claude Code가 차례로 진행하고, 빌드·실행 중 메모리 사용량(`docker stats`)과 이미지 크기(`docker images`)를 함께 보고한다.
 
-- OS는 Ubuntu 22.04 이상(1장)이다.
-- 디스크는 기본 50GB면 충분하다. Docker 이미지(Chromium 포함) 수 GB, SQLite DB와 PDF(30일 보관)는 예행 규모에서 1GB 미만으로 본다(추정).
-- NCP는 XEN 기반 2세대와 KVM 기반 3세대 서버를 함께 판다. 3세대 요금은 공식 "SSD Server" 페이지에 따로 있는데 이번에 숫자를 확인하지 못했다. 콘솔의 서버 생성 화면에서 같은 vCPU·메모리의 세대별 월 요금을 보고 싼 쪽을 고른다.
+### 8-2. 이 PC 로컬 리허설 (Docker 설치 뒤)
 
-### 8-2. 월 비용 추정 (VAT 별도)
+| 순서 | 확인 | 방법(Claude Code가 실행) |
+| --- | --- | --- |
+| 1 | 운영 이미지 빌드, 이미지 크기, 빌드 중 메모리 | `docker build -t saju-web:rehearsal .`, `docker images saju-web`, 빌드 중 `docker stats --no-stream` |
+| 2 | 운영 모드 시작 거부 6가지 | 같은 이미지로 `docker run --rm`에 환경변수만 바꿔 띄우고 `[시작 점검] 서버를 시작하지 않아요`와 종료 코드 1을 본다(NODE_ENV=development·test, ENABLE_FAKE_LLM, 예행 모드 없는 목 결제, 검수 전 주제, 예행 모드 + 실제 PG 키) |
+| 3 | 예행 모드 + 목 결제로 뜨기 | `-e REHEARSAL_MODE=1 -e PAYMENT_PROVIDER=mock`, `/api/health`가 `rehearsal`, 모든 화면 위 배너 |
+| 4 | 결제 → 생성 → 컨테이너 안 PDF | 목 결제(성공) 1번. **실제 Claude API를 1번 부른다(약 $0.25), 부르기 전에 알린다.** PDF가 컨테이너 안 Chromium으로 만들어지는지, 한글 글꼴이 맞는지, 쪽수 |
+| 5 | DB 백업·복원 | 컨테이너 안에서 `npm run db:backup` → 사본 무결성, 다른 폴더로 `npm run db:restore` 뒤 주문이 보이는지(Object Storage 업로드는 8-3에서) |
+| 6 | 정리 | 컨테이너·임시 볼륨 삭제, 이미지는 8-4에서 쓸지 정할 때까지 둔다 |
+
+이 PC는 리눅스가 아니라서 `deploy/*.sh`(systemd 타이머, 심볼릭 링크 검사)와 nginx는 여기서 보지 않는다.
+
+### 8-3. NCP 짧은 확인
+
+이 PC에서 못 보는 것만 본다. 서버는 짧게 쓰고 반납할 수 있게 시간 요금제로 만든다.
+
+| 순서 | 내가 NCP 콘솔·내 PC에서 할 일 | Claude Code가 안내할 일(명령·확인) |
+| --- | --- | --- |
+| 1 | 결제 수단 등록, 예산 알림 설정 | 비용표(8-5) 다시 확인 |
+| 2 | VPC·Subnet(공인), ACG: **80은 전체 허용**(https로 넘기기와 인증서 발급만 함), **443은 내 공인 IP만**, 22는 내 IP만(2-16) | ACG 규칙 확인 |
+| 3 | 서버 만들기(Ubuntu 22.04 이상, 8-4의 사양), 인증키(.pem)는 내 PC에 보관, 공인 IP 할당 | 접속 명령과 첫 업데이트, Docker·nginx·certbot·aws CLI 설치 |
+| 4 | 도메인을 정했으면 DNS A 레코드를 공인 IP로(8-6) | 인증서 발급(8-6) |
+| 5 | | 이미지 올리기(8-4: 이 PC에서 만든 이미지를 파일로 옮기거나 서버에서 빌드), `/srv/saju/data`(700) |
+| 6 | Claude API 키·`REFUND_ID_SECRET`을 서버의 `/etc/saju/app.env`(600)에 직접 입력(대화창에 붙이지 않음) | `app.env` 나머지: `APP_ORIGIN`, `TRUST_PROXY=true`, `REHEARSAL_MODE=1`, `PAYMENT_PROVIDER=mock`. `ENABLE_FAKE_LLM`·PG 키는 넣지 않는다 |
+| 7 | | `docker run`(3장 5번), nginx(3장 6번)와 기본 인증(2-16), `nginx -t` |
+| 8 | Object Storage 버킷·보호·7일 수명 주기(5장, 2-14), Object Storage 권한만 가진 API 인증키 | `backup.env`(600) 직접 입력 안내, 백업 타이머, 수동 백업 1회가 버킷에 올라가는지 |
+| 9 | 다른 망(휴대폰 데이터)에서 막히는지, 비밀번호로 열리는지 | `curl /api/health`가 `rehearsal`, 배너, 목 결제 1번으로 PDF까지(실제 Claude API 1번, 알리고 진행), `docker logs`에 시작 거부 없음, 2-15 점검 항목 |
+| 10 | 끝나면 서버를 계속 쓸지 정하고, 안 쓰면 서버·공인 IP·버킷 반납 | 출시로 넘어갈 때 2-17(REHEARSAL_MODE 제거) |
+
+### 8-4. 서버 사양: 이미지를 어디서 빌드하나
+
+| 방식 | 서버 사양 | 장단점 |
+| --- | --- | --- |
+| **이 PC에서 빌드 → 파일로 옮김(권장)** `docker save saju-web:<버전> \| gzip > saju.tar.gz` → `scp` → 서버에서 `gunzip -c saju.tar.gz \| docker load` | **2vCPU·4GB면 충분할 것으로 본다**(실행만: Node 앱 + PDF 1건 생성 때 Chromium). 8GB → 4GB로 줄면 월 약 1.3만~1.6만 원 덜 든다(8-5 표 기준, 확인 정도는 그 표와 같다) | 레지스트리가 필요 없다. 이미지 파일이 커서 올릴 때마다 시간이 걸린다(크기는 8-2에서 잰다. Chromium·개발 의존성까지 들어 있어 압축 전 수 GB로 추정, 확인 못 함) |
+| 이 PC에서 빌드 → 레지스트리 | 위와 같음 | NCP Container Registry(저장 공간은 Object Storage 요금, 확인 못 함)나 Docker Hub 비공개 저장소. 계정·인증 관리가 하나 더 생긴다. 서버가 여러 대가 되면 이쪽이 편하다 |
+| 서버에서 빌드(지금 3장 절차) | 2vCPU·8GB 권장(`next build` + Chromium 설치를 서버에서 함께) | 옮길 파일이 없다. 사양이 커야 한다 |
+
+- 이 PC(Windows, x86-64)의 Docker가 만드는 이미지는 linux/amd64라 NCP 서버(x86-64)에서 그대로 돈다.
+- 4GB 서버에서도 스왑 2GB를 만들어 둔다(PDF가 겹칠 때 대비).
+
+### 8-5. 월 비용 추정 (VAT 별도)
 
 공식 요금 페이지는 요금 숫자를 화면에서 따로 불러와, 이번에 자동으로 읽을 수 있었던 공식 숫자는 2vCPU 서버 예시 하나뿐이다. 나머지는 확인 정도를 함께 적었다. **서버를 만들기 전에 콘솔 요금 계산기로 다시 확인한다.**
 
@@ -205,29 +244,25 @@
 3. ③ NCP 공식 요금 페이지 검색 결과 문구: https://www.ncloud.com/charge/region/de (페이지에서 직접 읽지는 못함)
 4. ④ Object Storage 요금 검색 결과(공식 가이드·블로그): https://guide.ncloud-docs.com/docs/storage-storage-6-1
 
-### 8-3. 절차: 내가 콘솔에서 할 일 / Claude Code가 안내할 일
+### 8-6. 인증서 발급 방식
 
-비밀값(API 키, 비밀번호, 서버 접속 키)은 대화창에 붙여 넣지 않는다. 서버에서 직접 입력하거나 파일로 옮긴다.
+예행 서버는 443을 내 IP로만 열어 두므로, 인증서를 발급·갱신할 때 Let's Encrypt가 80번으로 들어올 수 있어야 한다.
 
-| 순서 | 내가 NCP 콘솔·내 PC에서 할 일 | Claude Code가 안내할 일(명령·확인) |
-| --- | --- | --- |
-| 1 | 결제 수단 등록, 예산 알림(콘솔 Cost Explorer 등) 설정 | 예상 비용표(8-2) 다시 확인 |
-| 2 | VPC·Subnet(공인) 만들기. ACG: 80·443은 내 공인 IP와 서버 자신의 공인 IP, 22는 내 IP만(2-16) | ACG 규칙 확인 목록 |
-| 3 | 서버 만들기: Ubuntu 22.04 이상, 8-1의 사양, 인증키(.pem) 내려받아 내 PC에 보관 | 접속 명령(`ssh -i <키> ubuntu@<공인 IP>` 등)과 첫 업데이트 |
-| 4 | 공인 IP 할당 | 2번 ACG에 서버 자신의 공인 IP 넣기 |
-| 5 | 도메인: 정해졌으면(1-1) DNS A 레코드를 공인 IP로. 아직이면 예행용 임시 주소를 쓸지 정한다(예: `<IP>.sslip.io`, Let's Encrypt 발급 가능 여부는 확인 못 함) | 인증서 발급(`certbot --nginx`). PDF 생성기가 `APP_ORIGIN`(https)을 열기 때문에 자체 서명 인증서는 쓰지 않는다 |
-| 6 | Object Storage 버킷 만들기, 5장의 백업 보호 네 가지·7일 수명 주기 켜기, 공개 정책 없음 확인(2-14) | 보호 상태 확인 명령, `backup.env` 작성 안내 |
-| 7 | Sub Account로 Object Storage 권한만 가진 API 인증키 만들기 | 키를 서버의 `/etc/saju/backup.env`(600)에 직접 입력하는 방법 |
-| 8 | Claude API 키를 서버의 `/etc/saju/app.env`에 직접 입력(대화창에 붙이지 않음) | Docker·nginx·certbot·aws CLI·git 설치, `/opt/saju`에 저장소 받기, `/srv/saju/data`(700) 만들기, `docker build` |
-| 9 | | `app.env` 작성 안내: `APP_ORIGIN`, `REFUND_ID_SECRET`(무작위 생성 명령), `TRUST_PROXY=true`, `REHEARSAL_MODE=1`, `PAYMENT_PROVIDER=mock`, `LLM_API_KEY`(8번에서 직접). `ENABLE_FAKE_LLM`·PG 키는 넣지 않는다 |
-| 10 | | `docker run`(3장 5번), nginx 설정(3장 6번)과 기본 인증(2-16), `nginx -t` |
-| 11 | 다른 망(휴대폰 데이터)에서 접속이 막히는지, 비밀번호로 열리는지 확인 | 확인: `curl /api/health`가 `"mode":"rehearsal"`, 화면 위 배너, 입력 → 미리보기 → 목 결제(성공) → 리포트·PDF, `docker logs`에 `[시작 점검]` 거부 없음 |
-| 12 | | 백업 타이머(5장), 수동 백업 1회, 다른 폴더로 복원 연습(5장 복원), 2-15 점검 항목 |
-| 13 | 예행이 끝나면: 서버를 계속 쓸지 정하고, 안 쓰면 서버·공인 IP·버킷 반납 | 출시로 넘어갈 때 2-17(REHEARSAL_MODE 제거) 절차 |
+| 방식 | 언제 | 방법 | 주의 |
+| --- | --- | --- | --- |
+| **실제 도메인 + Let's Encrypt HTTP-01(권장)** | 도메인을 정했을 때(1-1) | ACG에서 80을 전체 허용(nginx 80 블록은 https로 넘기기와 `/.well-known/acme-challenge/`만), `sudo certbot --nginx -d <도메인>`, 자동 갱신 `sudo certbot renew --dry-run` 확인 | 80을 내 IP로만 열면 발급·자동 갱신이 실패한다 |
+| 실제 도메인 + DNS-01 | 80을 열고 싶지 않을 때 | `certbot certonly --manual --preferred-challenges dns`로 TXT 레코드를 직접 넣는다 | 수동 방식은 자동 갱신이 안 된다(90일). 예행처럼 짧게 쓸 때만 |
+| 임시 주소(`<IP>.sslip.io` 등) + HTTP-01 | 도메인을 아직 못 정했을 때 | 위 권장 방식과 같다 | Let's Encrypt 발급 한도를 다른 사용자와 나눠 써 실패할 수 있다(확인 못 함). 운영에는 쓰지 않는다 |
+| 자체 서명 인증서 | 도메인 없이 나 혼자 잠깐 볼 때 | `openssl`로 만들어 nginx에 지정 | 브라우저 경고가 뜬다. PDF 생성은 서버 안 주소(아래)로 하므로 영향이 없다. PG 결제창 복귀 등 외부 연동에는 쓸 수 없다 |
 
-### 8-4. 예행 주의 사항
+### 8-7. PDF 생성 주소 (D-059)
+
+- PDF 생성기(서버 안 Chromium)는 공개 주소(`APP_ORIGIN`)가 아니라 같은 컨테이너 안 주소 `http://127.0.0.1:3000`으로 인쇄 화면을 연다(`PDF_RENDER_ORIGIN`으로 바꿀 수 있다). 메일의 다운로드 링크와 결제창 복귀 주소는 그대로 `APP_ORIGIN`을 쓴다.
+- 그래서 nginx 기본 인증·ACG에 서버 자신의 공인 IP를 넣을 필요가 없고, 인증서 종류와도 상관없다.
+
+### 8-8. 예행 주의 사항
 
 - **목 결제창에서 "결제 성공 후 풀이 생성 실패"를 고르지 않는다.** 운영 빌드에서는 강제 실패가 꺼져 있어, 이 선택지를 골라도 실패 대신 실제 Claude API를 불러 리포트를 만든다(비용 발생, 실패 화면은 재현되지 않는다, D-058 리뷰 LOW). 실패 화면은 개발 PC의 화면 테스트로 확인한다.
-- 예행 중 만든 리포트는 실제 Claude API를 쓴다(건당 약 $0.25). 필요한 만큼만 만든다.
+- 예행 중 만든 리포트는 실제 Claude API를 쓴다(건당 약 $0.25). 필요한 최소 횟수만, 부르기 전에 알리고 만든다.
 - 예행 서버는 접근 제한(2-16)을 건 상태로만 띄운다. 배너가 보이고 `/api/health`가 `rehearsal`인지 매번 확인한다.
 - 출시로 넘어갈 때는 `REHEARSAL_MODE`·`PAYMENT_PROVIDER=mock`을 지우고(2-17), 판매 주제의 `reviewed`가 모두 `true`여야 운영 서버가 뜬다(D-058).

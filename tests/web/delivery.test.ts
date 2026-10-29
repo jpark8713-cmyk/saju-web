@@ -16,6 +16,7 @@ import { createOrder } from '../../src/orders/create';
 import { orderStatus, RetryLimitReached, startGeneration } from '../../src/orders/generation';
 import { hashToken } from '../../src/orders/ids';
 import { reportViewFor, ReportExpired } from '../../src/orders/reportAccess';
+import { pdfRenderOrigin } from '../../src/config/origin';
 import { MemoryStore } from '../../src/store/memory';
 import { SqliteStore } from '../../src/store/sqlite';
 import type { Report, Store } from '../../src/store/types';
@@ -104,6 +105,25 @@ describe('받는 방법', () => {
     expect(email.outbox).toHaveLength(1);
     expect(renders).toEqual([o.orderId]);
     expect(deps.pdfs.has(o.orderId)).toBe(true);
+  });
+});
+
+describe('PDF 생성 주소(D-059)', () => {
+  it('PDF는 같은 서버 안 주소로 열고, 메일 링크는 공개 주소(APP_ORIGIN)를 쓴다', async () => {
+    const store = new MemoryStore();
+    const opened: string[] = [];
+    const { deps, email } = makeDeps(store, { renderOrigin: () => 'http://127.0.0.1:3000' });
+    const base = deps.renderPdf;
+    const o = await doneOrder(store, { ...deps, renderPdf: async (origin, id, token) => (opened.push(origin), base(origin, id, token)) }, { deliveryMethods: ['pdf', 'email'], email: 'a@example.com' });
+    expect(opened).toEqual(['http://127.0.0.1:3000']);
+    expect(email.outbox.at(-1)!.text).toContain('https://saju.example.com/api/download/');
+    expect(o.orderId).toBeTruthy();
+  });
+  it('기본 주소는 Next가 듣는 포트(PORT), PDF_RENDER_ORIGIN으로 바꿀 수 있다', () => {
+    expect(pdfRenderOrigin({ PORT: '3000' })).toBe('http://127.0.0.1:3000');
+    expect(pdfRenderOrigin({ PORT: '3500' })).toBe('http://127.0.0.1:3500');
+    expect(pdfRenderOrigin({})).toBe('http://127.0.0.1:3000');
+    expect(pdfRenderOrigin({ PORT: '3000', PDF_RENDER_ORIGIN: 'http://app:3000/x' })).toBe('http://app:3000');
   });
 });
 

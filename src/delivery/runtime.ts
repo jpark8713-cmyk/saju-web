@@ -1,5 +1,5 @@
 // 앱이 쓰는 전달 의존성 묶음(저장소, PDF 저장소, PDF 생성기, 메일 어댑터, 서비스 주소)
-import { appOrigin } from '../config/origin';
+import { appOrigin, pdfRenderOrigin } from '../config/origin';
 import { renderReportPdf } from '../report/pdf';
 import { getStore } from '../store';
 import { RENDER_TOKEN_HEADER, type DeliveryDeps } from './deliver';
@@ -14,5 +14,6 @@ export function deliveryDeps(requestOrigin = `http://localhost:${process.env.POR
     renderPdf: (origin, orderId, token) => renderReportPdf(origin, orderId, { header: RENDER_TOKEN_HEADER, value: token }),
     email: getEmailProvider(),
     origin: () => appOrigin(requestOrigin),
+    renderOrigin: () => pdfRenderOrigin(),
   };
 }

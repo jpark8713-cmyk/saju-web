@@ -67,6 +67,12 @@ test('예행 모드 서버(목 결제 없음): 모든 화면 위에 배너, 상�
   }
 });
 
+test('예행 배너가 있어도 정적 페이지는 정적으로 만들어진다(D-059)', async () => {
+  const manifest = JSON.parse(await readFile(join(process.cwd(), process.env.NEXT_DIST_DIR || '.next', 'prerender-manifest.json'), 'utf8'));
+  const routes = Object.keys(manifest.routes);
+  for (const r of ['/', '/input', '/preview', '/legal/terms', '/legal/refund', '/legal/privacy']) expect(routes).toContain(r);
+});
+
 // ---- 같은 빌드를 다른 설정으로 따로 띄우기(D-058) ----
 const PORT2 = Number(process.env.PW_PORT || 3200) + 1;
 const NEXT_BIN = join(process.cwd(), 'node_modules', 'next', 'dist', 'bin', 'next');
