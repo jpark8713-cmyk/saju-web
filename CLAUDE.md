@@ -17,3 +17,7 @@
   - 포트: `PW_PORT=3300`(개발 서버 테스트), `PW_PORT=3400`(운영 빌드 테스트)처럼 리뷰어마다 다르게
   - 예: `NEXT_DIST_DIR=.next-r1 PW_PORT=3300 npx playwright test`, `NEXT_DIST_DIR=.next-r1 PW_PORT=3400 npx playwright test -c playwright.prod.config.ts`
 
+
+## 개인정보 (사용자 지시 2026-10-29)
+
+- 사용자 이메일 주소를 요청 헤더·URL·페이로드에 넣지 않는다(사용자가 명시적으로 요청한 경우만 예외).
