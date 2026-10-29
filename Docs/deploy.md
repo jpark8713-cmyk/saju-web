@@ -173,7 +173,7 @@
 
 ### 8-1. 이 PC의 Docker 상태 (2026-10-29 확인)
 
-- **설치돼 있지 않다.** 이 터미널(Git Bash·PowerShell)에서 `docker` 명령이 없고, `C:\Program Files\Docker`도 없으며, 설치 프로그램 목록에도 Docker Desktop이 없다. WSL도 설치돼 있지 않다(`wsl -l -v` → "설치되어 있지 않습니다").
+- **설치돼 있지 않다(2026-10-29 두 번 확인, 사용자는 4.97.0으로 업데이트했다고 함. 다른 PC나 다른 Windows 계정일 수 있음).** 이 터미널(Git Bash·PowerShell)에서 `docker` 명령이 없고, `C:\Program Files\Docker`도 없으며, 설치 프로그램 목록에도 Docker Desktop이 없다. WSL도 설치돼 있지 않다(`wsl -l -v` → "설치되어 있지 않습니다").
 - **설치하려면(내가 할 일):**
   1. 관리자 PowerShell에서 `wsl --install` → 재부팅.
   2. Docker Desktop(Windows)을 설치하고 WSL 2 백엔드를 고른다. 실행 후 Claude Code 터미널을 새로 열어 `docker --version`, `docker info`가 되는지 확인한다.
@@ -299,3 +299,20 @@
 3. **수정판이 있으면:** 서버 패키지는 `sudo apt update && sudo apt upgrade`(nginx는 `sudo systemctl reload nginx`), 앱·Node·Chromium은 9-2의 1~7번을 바로 한다(테스트 포함).
 4. **수정판이 아직 없고 공격이 퍼지고 있으면:** 공지의 임시 조치(설정 끄기, nginx에서 해당 경로 막기 등)를 따른다. 심하면 nginx에서 점검 안내만 보내고 결제를 멈춘다. 조치와 해제 시점을 기록한다.
 5. 개인정보 유출이 의심되면 법정 신고 절차를 따른다(`LAUNCH_CHECKLIST` 2-3·2-5 법적 검토 항목과 함께 정한다) [확인 못 함: 신고 기준·기한은 법적 검토 대상].
+
+### 9-4. 사례: eMudhra 인증기관 침해 (2026-10, 점검 기록)
+
+- **사건:** eMudhra(emSign) 중간 인증서 8개의 개인키가 약하게 만들어져 노출됐다(CVE-2026-111943). 브라우저·OS는 2026-10-17~22에 차단했고, 브라우저가 아닌 프로그램(서버의 API 클라이언트, 컨테이너 등)은 각자 차단 목록을 받아야 한다.
+- **우리와의 관계:**
+  - **Node(앱의 외부 HTTPS: Claude API, 나중에 PG·메일):** 영향 있음. Node는 자체 인증서 목록을 쓴다. 공식 26.12.1(2026-10-21, 보안 릴리스)에 "차단된 공개키가 든 체인 거부"와 루트 인증서 갱신이 들어 있다. 이 항목이 eMudhra 대응이라는 것은 릴리스 노트 문구로 본 추정이다(관련 PR 본문은 확인 못 함). 같은 릴리스에 TLS·DNS·brotli High 취약점 수정도 있어, 26.7.0인 지금은 올려야 한다(`LAUNCH_CHECKLIST` 1-16).
+  - **이미지의 `ca-certificates`(Debian bookworm):** Node는 기본으로 이 목록을 쓰지 않는다. 그래서 앱 영향은 위 Node 업데이트로 막힌다. Debian 패키지에 이번 차단이 들어갔는지는 확인 못 함. `--no-cache` 재빌드로 그때의 최신 패키지를 받는다.
+  - **Chromium(PDF):** 이제 서버 안 http 주소만 열어 TLS를 쓰지 않는다(D-059). 영향 없음.
+  - **서버의 aws CLI(백업 업로드):** 자체 인증서 묶음을 쓰는 것으로 알려져 있으나, 이번 대응 버전은 확인 못 함. 서버를 만들 때 최신 버전을 설치한다.
+- **할 일:** `Dockerfile` 두 `FROM`을 `node:26.12.1-bookworm-slim` 이상으로 올리고(Docker Hub에 26.12.1·26.13.0 태그가 있는 것을 확인), 개발 PC Node도 같은 버전으로 올린 뒤 테스트하고, `docker build --pull --no-cache`로 다시 빌드한다(9-2).
+- **출처:**
+  - Node.js 릴리스 목록 https://nodejs.org/dist/index.json (26.12.1 security: true)
+  - Node 26 변경 기록 https://github.com/nodejs/node/blob/main/doc/changelogs/CHANGELOG_V26.md
+  - The Register https://www.theregister.com/security/2026/10/20/indian-certification-authority-emudhras-private-keys-compromised-one-of-them-was-the-number-4/5304312
+  - BleepingComputer https://www.bleepingcomputer.com/news/security/mozilla-google-apple-block-compromised-emudhra-ca-certificates/
+  - Endor Labs https://www.endorlabs.com/learn/emudhra-intermediate-ca-compromise-the-trust-stores-you-patched-and-the-ones-you-didnt-know-you-had
+  - AWS 보안 공지 https://aws.amazon.com/security/security-bulletins/2026-150-aws/
