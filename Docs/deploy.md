@@ -182,6 +182,8 @@
 
 ### 8-2. 이 PC 로컬 리허설 (Docker 설치 뒤)
 
+> **실행 순서서와 스크립트:** `Docs/REHEARSAL.md`, `scripts/rehearsal/local-rehearsal.sh`, `.env.rehearsal.example`. Docker는 데스크톱에만 있어 리허설은 데스크톱에서 한다(2026-10-29 결정). 아래 표는 그 스크립트가 하는 일이다.
+
 | 순서 | 확인 | 방법(Claude Code가 실행) |
 | --- | --- | --- |
 | 1 | 운영 이미지 빌드, 이미지 크기, 빌드 중 메모리 | `docker build -t saju-web:rehearsal .`, `docker images saju-web`, 빌드 중 `docker stats --no-stream` |

@@ -7,6 +7,17 @@
 - 운영 배포(NCP·Docker·nginx·백업): [`Docs/deploy.md`](Docs/deploy.md)
 - 출시 전 할 일: [`Docs/LAUNCH_CHECKLIST.md`](Docs/LAUNCH_CHECKLIST.md)
 - 화면 디자인 기준: [`DESIGN.md`](DESIGN.md)
+- 로컬 Docker 리허설: [`Docs/REHEARSAL.md`](Docs/REHEARSAL.md)
+
+## 새 PC에서 처음 시작하기
+
+1. **설치:** Git, Node.js(`Dockerfile`의 `FROM`과 같은 버전. 지금 26.7.0이고 26.13.0으로 올릴 예정, `Docs/LAUNCH_CHECKLIST.md` 1-16). Docker 리허설을 할 PC라면 Docker Desktop(WSL 2)도요.
+2. **저장소 받기:** `git clone <비공개 저장소 주소>` → 저장소 폴더로 이동.
+3. **의존성:** `npm ci` → `npx playwright install chromium`(PDF·화면 테스트용).
+4. **환경 설정:** `cp .env.example .env` 후 필요한 값만 채워요(아래 "환경 변수"). 비용 없이 돌리려면 `ENABLE_FAKE_LLM=true`, `PAYMENT_PROVIDER=mock`. 비밀값(API 키 등)은 `.env`에만 두고 커밋하지 않아요(`.gitignore`가 `.env`, `.env.*`, `samples-output/`, `node_modules/`를 빼요).
+5. **테스트:** `npm run typecheck` → `npm test` → `npm run e2e`(포트 3100) → `npm run e2e:prod`(포트 3200). 다른 작업이 그 포트를 쓰면 `PW_PORT`와 `NEXT_DIST_DIR`를 바꿔요(`CLAUDE.md`).
+6. **실행:** `npm run dev` → http://localhost:3000.
+7. 이 PC에만 있는 것: 실제 풀이 샘플(`samples-output/`)과 `.env` 값은 저장소에 없어요. 필요하면 따로 옮기거나 다시 만들어요(샘플 생성은 유료, `npm run measure:cost`).
 
 ## 진행 상황
 
@@ -43,10 +54,11 @@ cp .env.example .env   # 값을 채워요(아래 표). .env는 커밋하지 않�
 |------|-----------|------|------|
 | `LLM_API_KEY` | 실제 풀이를 만들 때만 | 필수 | Claude API 키 |
 | `LLM_MODEL` | 선택 | 선택 | 비우면 `claude-sonnet-5-5` (D-021) |
-| `ENABLE_FAKE_LLM` | `true` 권장 | 쓰지 않음 | 정해진 문장을 돌려주는 가짜 LLM이에요. 비용이 들지 않아요. 개발·테스트에서만 켜져요 |
+| `ENABLE_FAKE_LLM` | `true` 권장 | **넣지 않음** | 정해진 문장을 돌려주는 가짜 LLM이에요. 비용이 들지 않아요. 개발 서버에서만 켜져요. 운영 빌드에 들어 있으면 서버가 시작하지 않아요(D-058) |
 | `DATABASE_URL` | 선택 | 필수 | 예: `file:./data/saju.db`. 비우면 메모리 저장소예요. 서버를 끄면 데이터가 사라지고, 운영에서는 시작하지 않아요 |
 | `DB_REQUIRE_VOLUME` | 비움 | 이미지에 고정 | DB 폴더가 Docker 볼륨이 아니면 시작하지 않아요 |
-| `PAYMENT_PROVIDER` | `mock` | 실제 PG 연동 전까지 없음 | 목 결제는 개발·테스트에서만 동작해요(D-028) |
+| `PAYMENT_PROVIDER` | `mock` | 실제 PG 연동 전까지 없음 | 목 결제는 개발 서버와 운영 빌드의 예행 모드(`REHEARSAL_MODE=1`)에서만 돼요. 그 밖의 운영 빌드에서 `mock`이면 시작하지 않아요(D-058) |
+| `REHEARSAL_MODE` | 비움 | 예행 연습 때만 `1` | 화면 위 "리허설 서버" 배너, `/api/health`의 `mode: rehearsal`. 출시 전에 지워요(D-058) |
 | `PAYMENT_METHODS_ENABLED` | `kakaopay` | `kakaopay` | 켤 결제 수단(쉼표로 구분) |
 | `APP_ORIGIN` | 선택 | 필수 | 서비스 주소. PDF 생성과 결제 복귀 주소에 써요 |
 | `REFUND_ID_SECRET` | 선택 | 필수 | 환불 접수번호 HMAC 키(32자 이상) |
@@ -54,7 +66,7 @@ cp .env.example .env   # 값을 채워요(아래 표). .env는 커밋하지 않�
 | `EMAIL_PROVIDER` | `console` | 미정 (D-033) | `console`은 메일을 보내지 않고 개발용 보관함(`/api/dev/outbox`)에 넣어요 |
 | `DATAGOKR_API_KEY` | 선택 | 쓰지 않음 | 천문연 절기 기준 데이터를 다시 받을 때만 써요(`npm run fetch:kasi`) |
 
-`NODE_ENV=production`이면 목 결제, 가짜 LLM, 콘솔 메일, 개발용 보관함이 모두 꺼져요. 환경 변수와 상관없어요.
+운영 빌드(`next build` → `next start`)에서는 목 결제(예행 모드 제외), 가짜 LLM, 콘솔 메일, 개발용 보관함이 모두 꺼져요. 운영 빌드인지는 실행 때의 `NODE_ENV`가 아니라 빌드 때 정해져요(D-058).
 
 ## 로컬 실행
 
@@ -67,6 +79,8 @@ npm run dev
 npm run build
 npm start
 ```
+
+- 운영 빌드는 개발용 값을 받아 주지 않아요(D-058). `.env`에 `ENABLE_FAKE_LLM`이 있거나, `PAYMENT_PROVIDER=mock`인데 `REHEARSAL_MODE=1`이 없거나, 검수(`reviewed`) 전 주제가 판매 중이면 `npm start`가 `[시작 점검]` 메시지를 남기고 멈춰요. 운영 빌드 확인은 보통 `npm run e2e:prod`(값을 알아서 맞춰 띄워요)로 해요.
 
 - 결제 화면에서 결제하면 목 결제창(`/dev/mock-pg`)이 열려요. 결제 성공, 실패, "결제 성공 후 생성 실패"를 골라 흐름을 확인할 수 있어요.
 - 이메일 링크는 `/api/dev/outbox`(개발 전용)에서 확인해요.
